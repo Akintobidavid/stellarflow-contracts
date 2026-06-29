@@ -37,7 +37,9 @@ pub fn compute_mean(values: &[i128]) -> Result<i128, ContractError> {
 /// variance pass.  All intermediate operations use checked arithmetic.
 pub fn compute_sum_squared_deviations(values: &[i128], mean: i128) -> Result<i128, ContractError> {
     values.iter().try_fold(0_i128, |acc, &v| {
-        let dev = v - mean;
+        let dev = v
+            .checked_sub(mean)
+            .ok_or(ContractError::Overflow)?;
         let sq = dev.checked_mul(dev).ok_or(ContractError::Overflow)?;
         acc.checked_add(sq).ok_or(ContractError::Overflow)
     })
@@ -89,13 +91,21 @@ pub fn calculate_spread_bps(rate_a: i128, rate_b: i128) -> Result<i128, Contract
         return Err(ContractError::DivisionByZero);
     }
 
-    let delta = rate_a.saturating_sub(rate_b).abs();
+    let delta = rate_a
+        .checked_sub(rate_b)
+        .ok_or(ContractError::Overflow)?;
+
+    let delta = delta
+        .checked_abs()
+        .ok_or(ContractError::Overflow)?;
     let numerator = delta
         .checked_mul(10_000)
         .ok_or(ContractError::Overflow)?;
 
     // `rate_a` is confirmed non-zero, so this division is safe.
-    Ok(numerator / rate_a)
+    numerator
+        .checked_div(rate_a)
+        .ok_or(ContractError::DivisionByZero)
 }
 
 /// Multiplies two numbers and scales the result down by a fixed-point factor.
@@ -120,7 +130,9 @@ pub fn multiply_and_scale_down(a: i128, b: i128, scale_factor: i128) -> Result<i
     let product = a.checked_mul(b).ok_or(ContractError::Overflow)?;
 
     // The division performs the scale-down.
-    Ok(product / scale_factor)
+    product
+    .checked_div(scale_factor)
+    .ok_or(ContractError::DivisionByZero)
 }
 
 #[cfg(test)]
