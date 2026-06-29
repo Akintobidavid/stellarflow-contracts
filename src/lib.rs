@@ -51,6 +51,7 @@ pub mod auth;
 pub mod config;
 pub use config::{PriceVarianceConfig, get_price_variance_config, set_price_variance_config};
 pub mod consensus;
+pub mod fees;
 pub mod governance;
 pub mod math;
 pub mod slashing;
