@@ -755,3 +755,63 @@ mod bundle_processing_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod consensus_depth_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    fn setup_env() -> Env {
+        Env::default()
+    }
+
+    fn populate_cache(env: &Env, count: u32) {
+        let mut participants: Vec<Address> = Vec::new(env);
+        for _ in 0..count {
+            let node = Address::generate(env);
+            participants.push_back(node);
+        }
+        env.storage()
+            .temporary()
+            .set(&CONSENSUS_CACHE_KEY, &participants);
+    }
+
+    #[test]
+    fn test_empty_cache_rejected() {
+        let env = setup_env();
+        let result = check_consensus_depth(&env);
+        assert_eq!(result, Err(ContractError::IncompleteQuorum));
+    }
+
+    #[test]
+    fn test_one_validator_rejected() {
+        let env = setup_env();
+        populate_cache(&env, 1);
+        let result = check_consensus_depth(&env);
+        assert_eq!(result, Err(ContractError::IncompleteQuorum));
+    }
+
+    #[test]
+    fn test_two_validators_rejected() {
+        let env = setup_env();
+        populate_cache(&env, 2);
+        let result = check_consensus_depth(&env);
+        assert_eq!(result, Err(ContractError::IncompleteQuorum));
+    }
+
+    #[test]
+    fn test_three_validators_accepted() {
+        let env = setup_env();
+        populate_cache(&env, 3);
+        let result = check_consensus_depth(&env);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_many_validators_accepted() {
+        let env = setup_env();
+        populate_cache(&env, 10);
+        let result = check_consensus_depth(&env);
+        assert!(result.is_ok());
+    }
+}
