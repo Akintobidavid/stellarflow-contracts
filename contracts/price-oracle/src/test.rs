@@ -215,25 +215,21 @@ fn test_get_price_with_status_marks_stale_entries() {
 }
 
 #[test]
-fn test_update_price_rejects_untracked_asset() {
+fn test_update_price_rejects_minimum_quorum_not_met() {
     let (env, contract_id, client) = setup();
     let admin = Address::generate(&env);
     let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
 
-    set_admin(&env, &contract_id, &admin);
     add_provider(&env, &contract_id, &provider);
+    client.initialize(&admin, &soroban_sdk::vec![&env, asset.clone()]);
 
-    let result = client.try_update_price(
-        &provider,
-        &symbol_short!("BTC"),
-        &50_000_i128,
-        &6u32,
-        &100u32,
-        &3_600u64,
-    );
+    let asset = symbol_short!("ZAR");
+    client.add_asset(&admin, &asset);
+    let result = client.try_update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3_600u64, &100_000_i128);
     match result {
-        Err(Ok(err)) => assert_eq!(err, Error::InvalidAssetSymbol),
-        other => panic!("expected InvalidAssetSymbol, got {:?}", other),
+        Err(Ok(err)) => assert_eq!(err, Error::MinimumQuorumNotMet),
+        other => panic!("expected MinimumQuorumNotMet, got {:?}", other),
     }
 }
 

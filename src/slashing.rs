@@ -15,7 +15,7 @@ pub const MAX_DEVIATION_BPS: u32 = 10_000; // 100%
 /// Slashing penalty tiers based on deviation from consensus median.
 /// Each tier represents a percentage of the validator's stake to be burned.
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum SlashingTier {
     /// No penalty - deviation within acceptable noise threshold.
     None = 0,

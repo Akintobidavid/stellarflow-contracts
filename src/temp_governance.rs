@@ -47,7 +47,7 @@ pub const EXTENDED_PROPOSAL_TTL: u32 = 259_200; // ~15 days
 /// * `key` - Storage key for the proposal
 /// * `proposal` - The proposal data to store
 /// * `ttl` - Time-to-live in ledgers (auto-cleanup after this duration)
-pub fn store_temp_proposal<T: soroban_sdk::Contracttype>(
+pub fn store_temp_proposal<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
     env: &Env,
     key: &Symbol,
     proposal: &T,
@@ -62,7 +62,7 @@ pub fn store_temp_proposal<T: soroban_sdk::Contracttype>(
 /// Retrieve a proposal from temporary storage.
 ///
 /// Returns None if the proposal has expired or doesn't exist.
-pub fn get_temp_proposal<T: soroban_sdk::Contracttype>(
+pub fn get_temp_proposal<T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>(
     env: &Env,
     key: &Symbol,
 ) -> Option<T> {
@@ -94,28 +94,32 @@ pub fn extend_temp_proposal_ttl(env: &Env, key: &Symbol, ttl: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Env as _};
+    use soroban_sdk::testutils::Address as _;
 
     #[test]
     fn test_temp_proposal_storage() {
         let env = Env::default();
-        let test_key = symbol_short!("TEST");
-        let test_value = 42u64;
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        
+        env.as_contract(&contract_id, || {
+            let test_key = symbol_short!("TEST");
+            let test_value = 42u64;
 
-        // Store proposal
-        store_temp_proposal(&env, &test_key, &test_value, DEFAULT_PROPOSAL_TTL);
+            // Store proposal
+            store_temp_proposal(&env, &test_key, &test_value, DEFAULT_PROPOSAL_TTL);
 
-        // Verify it exists
-        assert!(has_temp_proposal(&env, &test_key));
+            // Verify it exists
+            assert!(has_temp_proposal(&env, &test_key));
 
-        // Retrieve proposal
-        let retrieved: u64 = get_temp_proposal(&env, &test_key).expect("proposal should exist");
-        assert_eq!(retrieved, test_value);
+            // Retrieve proposal
+            let retrieved: u64 = get_temp_proposal(&env, &test_key).expect("proposal should exist");
+            assert_eq!(retrieved, test_value);
 
-        // Remove proposal
-        remove_temp_proposal(&env, &test_key);
+            // Remove proposal
+            remove_temp_proposal(&env, &test_key);
 
-        // Verify it's gone
-        assert!(!has_temp_proposal(&env, &test_key));
+            // Verify it's gone
+            assert!(!has_temp_proposal(&env, &test_key));
+        });
     }
 }

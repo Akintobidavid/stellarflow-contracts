@@ -1,3 +1,6 @@
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
+use crate::ContractError;
+use crate::storage::SequenceKey;
 use crate::ContractError;
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 
@@ -36,30 +39,36 @@ pub fn compact_duplicate_price_rows(
     entries: &Vec<WeightedEntry>,
 ) -> Result<Vec<WeightedEntry>, ContractError> {
     let mut compacted: Vec<WeightedEntry> = Vec::new(env);
-    let mut index_by_value: Map<u64, u64> = Map::new(env);
-
+    // Use a simple linear search for duplicates instead of Map for gas optimization
+    // For small datasets, this is more efficient than Map overhead
+    
     for i in 0..entries.len() {
         let entry = entries.get(i).unwrap();
+        let mut found = false;
+        
+        for j in 0..compacted.len() {
+            let existing = compacted.get(j).unwrap();
+            if existing.value == entry.value {
+                let idx = j;
+                let merged_weight = existing
+                    .weight
+                    .checked_add(entry.weight)
+                    .ok_or(ContractError::Overflow)?;
 
-        if let Some(existing_index) = index_by_value.get(entry.value) {
-            let idx = existing_index as u32;
-            let existing = compacted.get(idx).unwrap();
-            let merged_weight = existing
-                .weight
-                .checked_add(entry.weight)
-                .ok_or(ContractError::Overflow)?;
-
-            compacted.set(
-                idx,
-                WeightedEntry {
-                    value: existing.value,
-                    weight: merged_weight,
-                },
-            );
-        } else {
-            let index = compacted.len() as u64;
+                compacted.set(
+                    idx,
+                    WeightedEntry {
+                        value: existing.value,
+                        weight: merged_weight,
+                    },
+                );
+                found = true;
+                break;
+            }
+        }
+        
+        if !found {
             compacted.push_back(entry.clone());
-            index_by_value.set(entry.value, index);
         }
     }
 
@@ -196,29 +205,55 @@ pub fn mock_oracle_price(env: &Env, _asset: Symbol) -> Result<i64, ContractError
     }
 }
 
+/// Verify that the current ledger sequence falls within the allowed epoch validation window.
+///
+/// Rejects submissions with `ContractError::EpochClosed` if the current
+/// host ledger has advanced past the epoch end, or is before the epoch start.
+pub fn verify_epoch_window(
+    env: &Env,
+    epoch_start: u32,
+    epoch_end: u32,
+) -> Result<(), ContractError> {
+    let current_ledger = env.ledger().sequence();
+    if current_ledger < epoch_start || current_ledger > epoch_end {
+        return Err(ContractError::EpochClosed);
+    }
+    Ok(())
+}
+
 /// Validate and register the sequence of the latest asset update.
 /// Rejects incoming price updates instantly if the incoming tracking sequence
 /// is less than or equal to the active stored checkpoint value.
+pub fn verify_and_update_sequence(env: &Env, asset: Symbol, incoming_sequence: u32) -> Result<(), ContractError> {
+    let seq_key = SequenceKey(asset.clone());
+    
+    if let Some(active_sequence) = env.storage().instance().get(&seq_key) {
 pub fn verify_and_update_sequence(
     env: &Env,
     asset: Symbol,
     incoming_sequence: u32,
 ) -> Result<(), ContractError> {
-    let key = symbol_short!("SEQ_TRK");
-    let mut tracker: Map<Symbol, u32> = env
-        .storage()
-        .instance()
-        .get(&key)
-        .unwrap_or_else(|| Map::new(env));
+    // ── Active epoch read (O(1) — single composite-key slot) ─────────────────
+    let active_key = ConsensusStorageKey::ConsensusSeq(asset.clone());
+    let active_sequence: Option<u32> = env.storage().instance().get(&active_key);
 
-    if let Some(active_sequence) = tracker.get(asset.clone()) {
-        if incoming_sequence <= active_sequence {
+    // Monotone-sequence invariant: reject stale or duplicate submissions.
+    if let Some(current) = active_sequence {
+        if incoming_sequence <= current {
             return Err(ContractError::StaleSequence);
         }
-    }
 
-    tracker.set(asset, incoming_sequence);
-    env.storage().instance().set(&key, &tracker);
+        // ── Archive the outgoing checkpoint before overwriting ────────────────
+        // The previous sequence value is offloaded to the dedicated archival
+        // partition so it is never loaded by subsequent active-epoch reads.
+        let archive_key = ConsensusStorageKey::EpochSeqArchive(asset.clone());
+        env.storage().instance().set(&archive_key, &current);
+    }
+    
+    env.storage().instance().set(&seq_key, &incoming_sequence);
+
+    // ── Write the new active checkpoint (isolated from archival history) ──────
+    env.storage().instance().set(&active_key, &incoming_sequence);
     Ok(())
 }
 
@@ -254,8 +289,8 @@ pub fn verify_and_update_block_gap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
     use soroban_sdk::Env;
+    use soroban_sdk::testutils::{Address as _, Ledger};
 
     fn make_entries(env: &Env, pairs: &[(u64, u64)]) -> Vec<WeightedEntry> {
         let mut v = Vec::new(env);
@@ -432,7 +467,121 @@ mod tests {
         assert_eq!(result, Err(ContractError::Overflow));
     }
 
-    // --- get_price_with_fallback tests ---
+    // --- verify_and_update_sequence (refactored: state-isolated composite keys) ---
+
+    #[test]
+    fn test_sequence_first_submission_accepted() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("NGN");
+            // First submission — no prior checkpoint, must succeed.
+            assert!(verify_and_update_sequence(&env, asset.clone(), 1).is_ok());
+            // Active checkpoint written to isolated composite slot.
+            assert_eq!(get_active_sequence(&env, asset.clone()), Some(1));
+            // Archive slot untouched (no previous value to archive).
+            assert_eq!(get_archived_sequence(&env, asset), None);
+        });
+    }
+
+    #[test]
+    fn test_sequence_advance_archives_previous_checkpoint() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("KES");
+            // Establish initial checkpoint.
+            verify_and_update_sequence(&env, asset.clone(), 10).unwrap();
+            // Advance to a higher sequence — old value should be archived.
+            verify_and_update_sequence(&env, asset.clone(), 20).unwrap();
+
+            assert_eq!(get_active_sequence(&env, asset.clone()), Some(20));
+            // Previous checkpoint (10) is now in the archival partition.
+            assert_eq!(get_archived_sequence(&env, asset), Some(10));
+        });
+    }
+
+    #[test]
+    fn test_sequence_stale_rejected() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("GHS");
+            verify_and_update_sequence(&env, asset.clone(), 5).unwrap();
+            // Equal-to-active is stale.
+            assert_eq!(
+                verify_and_update_sequence(&env, asset.clone(), 5),
+                Err(ContractError::StaleSequence)
+            );
+            // Less-than-active is stale.
+            assert_eq!(
+                verify_and_update_sequence(&env, asset.clone(), 4),
+                Err(ContractError::StaleSequence)
+            );
+            // Active checkpoint unchanged after rejection.
+            assert_eq!(get_active_sequence(&env, asset), Some(5));
+        });
+    }
+
+    #[test]
+    fn test_sequence_isolation_between_assets() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            let ngn = symbol_short!("NGN");
+            let kes = symbol_short!("KES");
+            verify_and_update_sequence(&env, ngn.clone(), 100).unwrap();
+            verify_and_update_sequence(&env, kes.clone(), 200).unwrap();
+
+            // Each asset's active sequence is stored in its own isolated slot.
+            assert_eq!(get_active_sequence(&env, ngn.clone()), Some(100));
+            assert_eq!(get_active_sequence(&env, kes.clone()), Some(200));
+
+            // Advancing one asset's sequence does not affect the other.
+            verify_and_update_sequence(&env, ngn.clone(), 150).unwrap();
+            assert_eq!(get_active_sequence(&env, kes), Some(200));
+            assert_eq!(get_archived_sequence(&env, ngn), Some(100));
+        });
+    }
+
+    #[test]
+    fn test_archive_only_retains_most_recent_previous_checkpoint() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("CFA");
+            verify_and_update_sequence(&env, asset.clone(), 1).unwrap();
+            verify_and_update_sequence(&env, asset.clone(), 2).unwrap();
+            // Archive holds 1 (previous before 2).
+            assert_eq!(get_archived_sequence(&env, asset.clone()), Some(1));
+            verify_and_update_sequence(&env, asset.clone(), 3).unwrap();
+            // Archive now holds 2 (previous before 3); 1 is no longer present.
+            assert_eq!(get_archived_sequence(&env, asset.clone()), Some(2));
+            assert_eq!(get_active_sequence(&env, asset), Some(3));
+        });
+    }
+
+    #[test]
+    fn test_get_active_sequence_returns_none_before_any_submission() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("ZAR");
+            assert_eq!(get_active_sequence(&env, asset), None);
+        });
+    }
+
+    #[test]
+    fn test_get_archived_sequence_returns_none_after_single_submission() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("UGX");
+            verify_and_update_sequence(&env, asset.clone(), 7).unwrap();
+            // Only one submission: archive slot was never written.
+            assert_eq!(get_archived_sequence(&env, asset), None);
+        });
+    }
 
     #[test]
     fn test_get_price_with_fallback_success() {
@@ -483,5 +632,41 @@ mod tests {
             let events = env.events().all();
             assert!(events.len() > 0);
         });
+    }
+
+    #[test]
+    fn test_verify_epoch_window_success() {
+        let env = Env::default();
+        env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+            timestamp: 0,
+            protocol_version: 0,
+            sequence_number: 100,
+            network_id: Default::default(),
+            base_reserve: 0,
+            min_temp_entry_ttl: 0,
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: 0,
+        });
+        
+        assert_eq!(verify_epoch_window(&env, 90, 110), Ok(()));
+        assert_eq!(verify_epoch_window(&env, 100, 100), Ok(()));
+    }
+
+    #[test]
+    fn test_verify_epoch_window_closed() {
+        let env = Env::default();
+        env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+            timestamp: 0,
+            protocol_version: 0,
+            sequence_number: 100,
+            network_id: Default::default(),
+            base_reserve: 0,
+            min_temp_entry_ttl: 0,
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: 0,
+        });
+        
+        assert_eq!(verify_epoch_window(&env, 101, 120), Err(ContractError::EpochClosed));
+        assert_eq!(verify_epoch_window(&env, 80, 99), Err(ContractError::EpochClosed));
     }
 }

@@ -600,7 +600,38 @@ mod tests {
         assert_eq!(result, Ok(u32::MAX));
     }
 
-    // --- normalize_to_seven tests ---------------------------------------------
+    // --- geometric_mean tests ------------------------------------------------
+
+    #[test]
+    fn test_geometric_mean_equal_values() {
+        // sqrt(100 * 100) = 100
+        assert_eq!(geometric_mean(100, 100), Some(100));
+    }
+
+    #[test]
+    fn test_geometric_mean_different_values() {
+        // sqrt(4 * 9) = sqrt(36) = 6
+        assert_eq!(geometric_mean(4, 9), Some(6));
+    }
+
+    #[test]
+    fn test_geometric_mean_zero() {
+        assert_eq!(geometric_mean(0, 1000), Some(0));
+        assert_eq!(geometric_mean(1000, 0), Some(0));
+    }
+
+    #[test]
+    fn test_geometric_mean_negative_returns_none() {
+        assert_eq!(geometric_mean(-1, 100), None);
+        assert_eq!(geometric_mean(100, -1), None);
+    }
+
+    #[test]
+    fn test_geometric_mean_scaled_prices() {
+        // sqrt(1_000_000 * 4_000_000) = sqrt(4_000_000_000_000) = 2_000_000
+        assert_eq!(geometric_mean(1_000_000, 4_000_000), Some(2_000_000));
+    }
+
 
     #[test]
     fn test_normalize_to_seven_scale_up() {

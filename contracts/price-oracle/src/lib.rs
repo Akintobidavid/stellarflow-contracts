@@ -437,6 +437,63 @@ pub trait StellarFlowTrait {
         bad_relayer: Address,
         amount: i128,
     ) -> Result<(), ContractError>;
+
+    // ── Circuit-Breaker ───────────────────────────────────────────────────────
+
+    /// Register a new coordinator node that may trip/reset the circuit-breaker.
+    ///
+    /// Only an authorized admin may call this.
+    fn register_circuit_breaker_coordinator(
+        env: Env,
+        admin: Address,
+        coordinator: Address,
+    ) -> Result<(), ContractError>;
+
+    /// Remove a coordinator node's circuit-breaker privileges.
+    ///
+    /// Only an authorized admin may call this.
+    fn remove_circuit_breaker_coordinator(
+        env: Env,
+        admin: Address,
+        coordinator: Address,
+    ) -> Result<(), ContractError>;
+
+    /// Trip the global circuit-breaker, instantly dropping all price reads.
+    ///
+    /// Only a verified coordinator node may call this.
+    fn trip_circuit_breaker(env: Env, coordinator: Address) -> Result<(), ContractError>;
+
+    /// Reset (lift) the global circuit-breaker, re-enabling price reads.
+    ///
+    /// Only a verified coordinator node may call this.
+    fn reset_circuit_breaker(env: Env, coordinator: Address) -> Result<(), ContractError>;
+
+    /// Trip the circuit-breaker for a specific high-volatility asset pair.
+    ///
+    /// Only a verified coordinator node may call this.
+    fn trip_circuit_breaker_for_asset(
+        env: Env,
+        coordinator: Address,
+        asset: Symbol,
+    ) -> Result<(), ContractError>;
+
+    /// Reset the circuit-breaker for a specific asset pair.
+    ///
+    /// Only a verified coordinator node may call this.
+    fn reset_circuit_breaker_for_asset(
+        env: Env,
+        coordinator: Address,
+        asset: Symbol,
+    ) -> Result<(), ContractError>;
+
+    /// Return `true` when the global circuit-breaker flag is active.
+    fn is_circuit_breaker_active(env: Env) -> bool;
+
+    /// Return `true` when the per-asset circuit-breaker flag is active.
+    fn is_asset_circuit_breaker_active(env: Env, asset: Symbol) -> bool;
+
+    /// Return a snapshot of the circuit-breaker state for monitoring dashboards.
+    fn get_circuit_breaker_info(env: Env) -> crate::admin::CircuitBreakerInfo;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -503,7 +560,107 @@ pub enum ContractError {
     /// Invalid slippage tolerance - must be between 0 and 10000 basis points (0-100%).
     InvalidSlippageTolerance = 11,
     /// Fewer than three independent node sources contributed to the current consensus pool.
-    IncompleteQuorum = 12,
+    MinimumQuorumNotMet = 12,
+    /// The circuit-breaker is active — price reads for high-volatility assets are blocked.
+    CircuitBreakerActive = 13,
+    /// The circuit-breaker is already active; cannot trip it again until it is reset.
+    CircuitBreakerAlreadyActive = 14,
+    /// The caller is not a registered coordinator node.
+    NotCoordinator = 15,
+    /// The circuit-breaker is not currently active; nothing to reset.
+    CircuitBreakerNotActive = 16,
+    /// Submitted price value is negative, zero, or otherwise invalid.
+    InvalidPrice = 17,
+    /// Arithmetic overflow during price math (e.g. weighted-index calculation).
+    PriceMathOverflow = 18,
+    /// Asset weight is zero, which would produce a division-by-zero.
+    InvalidWeight = 19,
+    /// Batch operation exceeds the maximum allowed asset count.
+    TooManyAssets = 20,
+    /// Pool liquidity reported by the provider is below the configured threshold.
+    LiquidityBelowThreshold = 21,
+    /// Liquidity value is negative or zero — cannot be used for validation.
+    InvalidLiquidity = 22,
+    /// Contract has been self-destructed and is permanently unusable.
+    ContractDestroyed = 23,
+    /// Contract has not been initialized yet.
+    NotInitialized = 24,
+    /// Price data exceeds the maximum allowed age.
+    StaleRateData = 25,
+    /// Reentrancy detected — call stack already inside this contract.
+    ReentrancyDetected = 26,
+    /// Provider submitted another price update too soon (ledger gap too small).
+    LedgerGapTooSmall = 27,
+    /// Price is below the configured absolute floor.
+    PriceOutOfBounds = 28,
+    /// Contract or admin is already initialized.
+    AlreadyInitialized = 29,
+    /// Emergency halt is active — all price reads are blocked.
+    EmergencyHalted = 30,
+    /// No admin address has been set in storage.
+    AdminNotSet = 31,
+    /// No pending admin transfer found.
+    PendingAdminNotFound = 32,
+    /// Caller is not the pending admin.
+    NotPendingAdmin = 33,
+    /// Pending admin timestamp is missing from storage.
+    PendingAdminTimestampMissing = 34,
+    /// Admin timelock period has not elapsed yet.
+    AdminTimelockNotExpired = 35,
+    /// Fee token address has not been configured.
+    FeeTokenNotSet = 36,
+    /// Query fee amount must be non-negative.
+    InvalidQueryFee = 37,
+    /// No reward balance available to claim.
+    NoRewards = 38,
+    /// Fee vault does not hold enough balance to cover the withdrawal.
+    InsufficientVaultBalance = 39,
+    /// Normalized price is zero or negative after decimal adjustment.
+    InvalidNormalizedPrice = 40,
+    /// Caller is not an authorized admin.
+    NotAuthorized = 41,
+    /// Caller is not an authorized provider/relayer.
+    ProviderNotAuthorized = 42,
+    /// Caller is not the Community Council.
+    CouncilRequired = 43,
+    /// Contract is in emergency freeze state.
+    ContractFrozen = 44,
+    /// Price deviation exceeds the configured maximum (flash crash protection).
+    FlashCrashDetected = 45,
+    /// Price floor value is invalid (zero, negative, or above max bound).
+    InvalidPriceFloor = 46,
+    /// No previous configuration snapshot to roll back to.
+    NoPreviousConfig = 47,
+    /// Price bounds are invalid (min >= max, zero, or negative).
+    InvalidPriceBounds = 48,
+    /// Max deviation percentage is outside the valid governance range.
+    InvalidMaxDeviation = 49,
+    /// Multi-signature validation failed (duplicate admins, insufficient count, etc.).
+    MultiSigValidationFailed = 50,
+    /// Action type code is unrecognized or not supported in the current context.
+    InvalidActionType = 51,
+    /// The referenced proposed action does not exist.
+    ActionNotFound = 52,
+    /// The proposed action has already been executed.
+    ActionAlreadyExecuted = 53,
+    /// The proposed action has been cancelled.
+    ActionCancelled = 54,
+    /// Governance vote quorum was not reached.
+    QuorumNotReached = 55,
+    /// Delegate address must differ from the owner address.
+    InvalidDelegate = 56,
+    /// Liquidity threshold is outside the valid range.
+    InvalidLiquidityThreshold = 57,
+    /// Slash or stake amount is zero or negative.
+    InvalidSlashAmount = 58,
+    /// Slash token contract address has not been configured.
+    SlashTokenNotSet = 59,
+    /// Provider's staked balance is insufficient for the requested operation.
+    InsufficientStake = 60,
+    /// Admin weight value is outside the allowed range (1–100).
+    InvalidAdminWeight = 61,
+    /// Weight threshold value is invalid (below minimum or above maximum).
+    InvalidWeightThreshold = 62,
 }
 
 pub type Error = ContractError;
@@ -1422,6 +1579,8 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, ContractError::EmergencyHalted);
         }
+        // Circuit-breaker: drop reads for quarantined high-volatility pairs.
+        crate::admin::_require_circuit_breaker_inactive(&env, &asset);
         let key = if verified {
             DataKey::VerifiedPrice(asset)
         } else {
@@ -1607,6 +1766,8 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, ContractError::EmergencyHalted);
         }
+        // Circuit-breaker: drop reads for quarantined high-volatility pairs.
+        crate::admin::_require_circuit_breaker_inactive(&env, &asset);
         match env
             .storage()
             .persistent()
@@ -1629,6 +1790,8 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, ContractError::EmergencyHalted);
         }
+        // Circuit-breaker: drop reads for quarantined high-volatility pairs.
+        crate::admin::_require_circuit_breaker_inactive(&env, &asset);
         env.storage()
             .persistent()
             .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
@@ -2165,6 +2328,27 @@ impl PriceOracle {
             }
         }
 
+        // Add the normalized price entry to the buffer, first checking it
+        // falls within the ±15% deviation window against the rolling baseline.
+        let twap_key = DataKey::Twap(asset.clone());
+        let twap_entries: soroban_sdk::Vec<(u64, i128)> = env
+            .storage()
+            .persistent()
+            .get(&twap_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        let candidate = soroban_sdk::vec![
+            &env,
+            PriceBufferEntry {
+                price: normalized,
+                provider: source.clone(),
+                timestamp: env.ledger().timestamp(),
+            }
+        ];
+        let accepted = validation::filter_feeds_by_deviation(&twap_entries, candidate, &env);
+        if accepted.is_empty() {
+            return Err(Error::FlashCrashDetected);
+        }
+        let entry = accepted.get(0).unwrap();
         // ── Liquidity validation: flash loan manipulation prevention ────────────
         // Validate that the reported pool liquidity meets the configured minimum
         // threshold. This check prevents price manipulation via flash loans or
@@ -4234,16 +4418,91 @@ impl PriceOracle {
     pub fn claim_rewards(env: Env, relayer: Address, token_contract: Address) -> i128 {
         crate::rewards::Rewards::claim_rewards(env, relayer, token_contract)
     }
+
+    // ── Circuit-Breaker ───────────────────────────────────────────────────────
+
+    /// Register a new coordinator node that may trip/reset the circuit-breaker.
+    pub fn register_circuit_breaker_coordinator(
+        env: Env,
+        admin: Address,
+        coordinator: Address,
+    ) -> Result<(), ContractError> {
+        _require_not_destroyed(&env);
+        crate::admin::register_circuit_breaker_coordinator(&env, &admin, &coordinator)
+    }
+
+    /// Remove a coordinator node's circuit-breaker privileges.
+    pub fn remove_circuit_breaker_coordinator(
+        env: Env,
+        admin: Address,
+        coordinator: Address,
+    ) -> Result<(), ContractError> {
+        _require_not_destroyed(&env);
+        crate::admin::remove_circuit_breaker_coordinator(&env, &admin, &coordinator)
+    }
+
+    /// Trip the global circuit-breaker, instantly dropping all price reads.
+    pub fn trip_circuit_breaker(
+        env: Env,
+        coordinator: Address,
+    ) -> Result<(), ContractError> {
+        _require_not_destroyed(&env);
+        crate::admin::trip_circuit_breaker(&env, &coordinator)
+    }
+
+    /// Reset (lift) the global circuit-breaker, re-enabling price reads.
+    pub fn reset_circuit_breaker(
+        env: Env,
+        coordinator: Address,
+    ) -> Result<(), ContractError> {
+        _require_not_destroyed(&env);
+        crate::admin::reset_circuit_breaker(&env, &coordinator)
+    }
+
+    /// Trip the circuit-breaker for a specific high-volatility asset pair.
+    pub fn trip_circuit_breaker_for_asset(
+        env: Env,
+        coordinator: Address,
+        asset: Symbol,
+    ) -> Result<(), ContractError> {
+        _require_not_destroyed(&env);
+        crate::admin::trip_circuit_breaker_for_asset(&env, &coordinator, &asset)
+    }
+
+    /// Reset the circuit-breaker for a specific asset pair.
+    pub fn reset_circuit_breaker_for_asset(
+        env: Env,
+        coordinator: Address,
+        asset: Symbol,
+    ) -> Result<(), ContractError> {
+        _require_not_destroyed(&env);
+        crate::admin::reset_circuit_breaker_for_asset(&env, &coordinator, &asset)
+    }
+
+    /// Return `true` when the global circuit-breaker flag is active.
+    pub fn is_circuit_breaker_active(env: Env) -> bool {
+        crate::admin::is_circuit_breaker_active(&env)
+    }
+
+    /// Return `true` when the per-asset circuit-breaker flag is active.
+    pub fn is_asset_circuit_breaker_active(env: Env, asset: Symbol) -> bool {
+        crate::admin::is_asset_circuit_breaker_active(&env, &asset)
+    }
+
+    /// Return a snapshot of the circuit-breaker state for monitoring dashboards.
+    pub fn get_circuit_breaker_info(env: Env) -> crate::admin::CircuitBreakerInfo {
+        crate::admin::get_circuit_breaker_info(&env)
+    }
 }
 
 mod asset_symbol;
 mod auth;
 mod callbacks;
+pub mod admin;
 #[cfg(test)]
 mod delegate_tests;
 pub mod math;
 mod median;
-mod slashing;
 pub mod slashing;
 mod test;
 mod types;

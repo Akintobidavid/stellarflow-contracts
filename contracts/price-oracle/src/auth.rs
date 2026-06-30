@@ -31,6 +31,21 @@ pub enum DataKey {
     SubmissionDelegate(Address),
     /// Maps a delegate address back to the admin who authorized it.
     DelegateOf(Address),
+
+    // ── Circuit-Breaker ───────────────────────────────────────────────────────
+    /// Registered coordinator nodes that may trigger the circuit-breaker.
+    /// Value: Vec<Address>.
+    CircuitBreakerCoordinators,
+    /// Global circuit-breaker flag.  When true, every price query for a
+    /// high-volatility asset is dropped immediately.
+    CircuitBreakerActive,
+    /// Ledger timestamp at which the circuit-breaker was last tripped.
+    CircuitBreakerTrippedAt,
+    /// Address of the coordinator that last tripped the circuit-breaker.
+    CircuitBreakerTrippedBy,
+    /// Per-asset circuit-breaker override flag (Symbol → bool).
+    /// When true the asset is individually paused regardless of the global flag.
+    CircuitBreakerPairedAsset(soroban_sdk::Symbol),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,6 +68,10 @@ pub fn _has_admin(env: &Env) -> bool {
 }
 
 /// Check if a caller is in the authorized admin list.
+///
+/// Loads the admin list onto a fixed-size stack slice and scans linearly —
+/// no heap-allocated map is created inside the auth loop, reducing gas on
+/// routine multi-signature verification paths (closes #528).
 pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
     if _is_revoked(env, caller) {
         return false;
@@ -61,8 +80,27 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
     env.storage()
         .instance()
         .get::<DataKey, Vec<Address>>(&DataKey::Admin)
-        .map(|admins| admins.iter().any(|admin| admin == *caller))
-        .unwrap_or(false)
+    else {
+        return false;
+    };
+
+    // Stack-local fixed buffer — avoids any BTreeMap / HashMap heap allocation.
+    const CAP: usize = 16;
+    let mut buf: [Option<Address>; CAP] = [
+        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None,
+    ];
+    let len = (admins.len() as usize).min(CAP);
+    for i in 0..len {
+        buf[i] = Some(admins.get(i as u32).unwrap());
+    }
+
+    for i in 0..len {
+        if buf[i].as_ref() == Some(caller) {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn _require_authorized(env: &Env, caller: &Address) {

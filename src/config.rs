@@ -316,6 +316,7 @@ mod tests {
 
     #[test]
     fn get_returns_default_before_any_set() {
+        use crate::TimeLockedUpgradeContract;
         let env = soroban_sdk::Env::default();
         let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let client = crate::TimeLockedUpgradeContractClient::new(&env, &contract_id);
@@ -325,6 +326,7 @@ mod tests {
 
     #[test]
     fn set_and_get_round_trips_full_struct() {
+        use crate::TimeLockedUpgradeContract;
         use soroban_sdk::testutils::Address as _;
         use soroban_sdk::Address;
 
@@ -352,6 +354,7 @@ mod tests {
 
     #[test]
     fn set_rejects_non_admin_caller() {
+        use crate::TimeLockedUpgradeContract;
         use soroban_sdk::testutils::Address as _;
         use soroban_sdk::Address;
 
@@ -372,6 +375,7 @@ mod tests {
 
     #[test]
     fn set_rejects_invalid_config() {
+        use crate::TimeLockedUpgradeContract;
         use soroban_sdk::testutils::Address as _;
         use soroban_sdk::Address;
 

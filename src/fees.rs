@@ -5,7 +5,14 @@
 //! standard 10^7 fixed-point footprint prior to ledger mutations.
 
 use crate::{AssetId, ContractError, TimeLockedUpgradeContract};
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Env, Vec};
+
+pub const STANDARD_FIXED_POINT_SCALE: i128 = 10_000_000;
+pub const INTERIOR_FEE_PRECISION_SCALE: i128 = 100_000_000_000_000;
+
+// ---------------------------------------------------------------------------
+// Asset pricing storage (general — unchanged)
+// ---------------------------------------------------------------------------
 
 /// Interior scaling coefficient applied before division steps (10^14).
 pub const INTERIOR_SCALE: u128 = 100_000_000_000_000;
@@ -36,93 +43,40 @@ impl CorridorFeePool {
     }
 }
 
-/// Scale an intermediate product into interior precision space before division.
-fn scale_product_to_interior(a: u128, b: u128) -> Result<u128, ContractError> {
-    a.checked_mul(b)
-        .ok_or(ContractError::Overflow)?
-        .checked_mul(INTERIOR_SCALE)
-        .ok_or(ContractError::Overflow)
+// ---------------------------------------------------------------------------
+// Corridor weight profile — separated from asset pricing entries (issue #530)
+// ---------------------------------------------------------------------------
+
+/// Dedicated profile holding dynamic corridor weight variables.
+/// Kept in its own storage key so audits and state updates never
+/// touch the general asset pricing block.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorridorWeightProfile {
+    pub asset: AssetId,
+    pub base_weight: u64,
+    pub dynamic_weight: u64,
 }
 
-/// Normalize an interior-space quotient back to the 10^7 fixed-point footprint.
-pub fn normalize_to_fixed_point_footprint(interior_value: u128) -> Result<u64, ContractError> {
-    let normalized = interior_value
-        .checked_div(INTERIOR_SCALE)
-        .ok_or(ContractError::DivisionByZero)?;
-    u64::try_from(normalized).map_err(|_| ContractError::Overflow)
+/// Separate storage namespace for corridor weight profiles.
+#[contracttype]
+pub enum CorridorWeightKey {
+    Profile(AssetId),
 }
 
-/// Multiply two fixed-point values and scale down to the 10^7 footprint.
-///
-/// Pre-multiplies the intermediate product by `INTERIOR_SCALE` before the
-/// division step, then normalizes the result back to the standard footprint.
-pub fn multiply_and_scale_down(a: u64, b: u64) -> Result<u64, ContractError> {
-    let interior_product = scale_product_to_interior(u128::from(a), u128::from(b))?;
-    let interior_quotient = interior_product
-        .checked_div(FIXED_POINT_SCALE)
-        .ok_or(ContractError::DivisionByZero)?;
-    normalize_to_fixed_point_footprint(interior_quotient)
-}
-
-/// Compute a single relayer's corridor usage fee share from the variable pool.
-///
-/// Uses interior scaling so fractional weights do not truncate before the
-/// final stroop allocation is written to ledger storage.
-pub fn compute_corridor_usage_fee_share(
-    total_fee: u64,
-    relayer_usage: u64,
-    total_usage: u64,
-) -> Result<u64, ContractError> {
-    if total_usage == 0 {
-        return Err(ContractError::DivisionByZero);
+impl CorridorWeightProfile {
+    fn new(asset: AssetId) -> Self {
+        Self {
+            asset,
+            base_weight: 0,
+            dynamic_weight: 0,
+        }
     }
-    if total_fee == 0 || relayer_usage == 0 {
-        return Ok(0);
-    }
-
-    let interior_numerator = u128::from(total_fee)
-        .checked_mul(u128::from(relayer_usage))
-        .ok_or(ContractError::Overflow)?
-        .checked_mul(INTERIOR_SCALE)
-        .ok_or(ContractError::Overflow)?;
-
-    let interior_quotient = interior_numerator / u128::from(total_usage);
-    normalize_to_fixed_point_footprint(interior_quotient)
 }
 
-/// Compute a relayer's fee share across a multi-hop corridor path.
-///
-/// Combines hop-level and relayer-level usage weights in one interior-scaled
-/// pass to avoid compounded truncation error across separate relayers.
-pub fn compute_multi_hop_corridor_fee_share(
-    total_fee: u64,
-    hop_usage: u64,
-    relayer_usage: u64,
-    total_hop_usage: u64,
-    total_relayer_usage: u64,
-) -> Result<u64, ContractError> {
-    if total_hop_usage == 0 || total_relayer_usage == 0 {
-        return Err(ContractError::DivisionByZero);
-    }
-    if total_fee == 0 || hop_usage == 0 || relayer_usage == 0 {
-        return Ok(0);
-    }
-
-    let interior_numerator = u128::from(total_fee)
-        .checked_mul(u128::from(hop_usage))
-        .ok_or(ContractError::Overflow)?
-        .checked_mul(u128::from(relayer_usage))
-        .ok_or(ContractError::Overflow)?
-        .checked_mul(INTERIOR_SCALE)
-        .ok_or(ContractError::Overflow)?;
-
-    let interior_denominator = u128::from(total_hop_usage)
-        .checked_mul(u128::from(total_relayer_usage))
-        .ok_or(ContractError::Overflow)?;
-
-    let interior_quotient = interior_numerator / interior_denominator;
-    normalize_to_fixed_point_footprint(interior_quotient)
-}
+// ---------------------------------------------------------------------------
+// Fee pool functions (unchanged behaviour)
+// ---------------------------------------------------------------------------
 
 pub fn add_corridor_fees(
     env: Env,
@@ -132,18 +86,16 @@ pub fn add_corridor_fees(
     variable_fee: u64,
 ) -> Result<CorridorFeePool, ContractError> {
     admin.require_auth();
-    let data = TimeLockedUpgradeContract::get_data(&env)?;
+    let data = TimeLockedUpgradeContract::get_data(env.clone())?;
     if data.admin != admin {
         return Err(ContractError::NotAdmin);
     }
-
     let key = FeesStorageKey::CorridorPool(asset.clone());
     let mut pool: CorridorFeePool = env
         .storage()
         .instance()
         .get(&key)
         .unwrap_or(CorridorFeePool::new(asset.clone()));
-
     pool.collected = pool
         .collected
         .checked_add(collected)
@@ -152,7 +104,6 @@ pub fn add_corridor_fees(
         .variable_pool
         .checked_add(variable_fee)
         .ok_or(ContractError::Overflow)?;
-
     env.storage().instance().set(&key, &pool);
     Ok(pool)
 }
@@ -165,22 +116,81 @@ pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
         .unwrap_or(CorridorFeePool::new(asset))
 }
 
+pub fn distribute_variable_fee_pool(
+    env: &Env,
+    variable_pool: u64,
+    relayer_weights: Vec<u64>,
+) -> Result<Vec<u64>, ContractError> {
+    let total_weight = relayer_weights
+        .iter()
+        .try_fold(0_i128, |acc, weight| {
+            acc.checked_add(weight as i128)
+                .ok_or(ContractError::Overflow)
+        })?;
+
+    let mut profiles = Vec::new(env);
+    if total_weight == 0 || relayer_weights.len() == 0 {
+        return Ok(profiles);
+    }
+
+    let pool_profile = (variable_pool as i128)
+        .checked_mul(STANDARD_FIXED_POINT_SCALE)
+        .ok_or(ContractError::Overflow)?;
+    let interior_pool_profile = pool_profile
+        .checked_mul(INTERIOR_FEE_PRECISION_SCALE)
+        .ok_or(ContractError::Overflow)?;
+
+    let last_index = relayer_weights.len() - 1;
+    let mut assigned_profile = 0_i128;
+
+    for index in 0..relayer_weights.len() {
+        let profile = if index == last_index {
+            pool_profile
+                .checked_sub(assigned_profile)
+                .ok_or(ContractError::Overflow)?
+        } else {
+            let weight = relayer_weights
+                .get(index)
+                .ok_or(ContractError::Overflow)? as i128;
+            let interior_share = interior_pool_profile
+                .checked_mul(weight)
+                .ok_or(ContractError::Overflow)?
+                .checked_div(total_weight)
+                .ok_or(ContractError::DivisionByZero)?;
+            interior_share
+                .checked_div(INTERIOR_FEE_PRECISION_SCALE)
+                .ok_or(ContractError::DivisionByZero)?
+        };
+
+        assigned_profile = assigned_profile
+            .checked_add(profile)
+            .ok_or(ContractError::Overflow)?;
+        profiles.push_back(profile.try_into().map_err(|_| ContractError::Overflow)?);
+    }
+
+    Ok(profiles)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_interior_scale_constant() {
-        assert_eq!(INTERIOR_SCALE, 100_000_000_000_000);
-        assert_eq!(FIXED_POINT_SCALE, 10_000_000);
-    }
+    fn fee_distribution_normalizes_to_standard_fixed_point_footprint() {
+        let env = Env::default();
+        let mut weights = Vec::new(&env);
+        weights.push_back(1);
+        weights.push_back(1);
+        weights.push_back(1);
 
-    #[test]
-    fn test_multiply_and_scale_down_preserves_precision() {
-        // 1.5 * 2.5 = 3.75 in 10^7 fixed-point
+        let profiles = distribute_variable_fee_pool(&env, 1, weights).unwrap();
+
+        assert_eq!(profiles.get(0), Some(3_333_333));
+        assert_eq!(profiles.get(1), Some(3_333_333));
+        assert_eq!(profiles.get(2), Some(3_333_334));
         assert_eq!(
-            multiply_and_scale_down(15_000_000, 25_000_000),
-            Ok(37_500_000)
+            profiles.iter().fold(0_u64, |acc, value| acc + value),
+            STANDARD_FIXED_POINT_SCALE as u64
         );
     }
 
