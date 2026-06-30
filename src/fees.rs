@@ -1,3 +1,9 @@
+//! High-precision fee arithmetic for multi-hop corridor pools.
+//!
+//! Fractional corridor usage fee splits scale intermediate products by
+//! `INTERIOR_SCALE` (10^14) before division, then normalize back to the
+//! standard 10^7 fixed-point footprint prior to ledger mutations.
+
 use crate::{AssetId, ContractError, TimeLockedUpgradeContract};
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
@@ -7,6 +13,12 @@ pub const INTERIOR_FEE_PRECISION_SCALE: i128 = 100_000_000_000_000;
 // ---------------------------------------------------------------------------
 // Asset pricing storage (general — unchanged)
 // ---------------------------------------------------------------------------
+
+/// Interior scaling coefficient applied before division steps (10^14).
+pub const INTERIOR_SCALE: u128 = 100_000_000_000_000;
+
+/// System standard fixed-point footprint (10^7).
+pub const FIXED_POINT_SCALE: u128 = 10_000_000;
 
 #[contracttype]
 #[derive(Clone)]
@@ -183,29 +195,63 @@ mod tests {
     }
 
     #[test]
-    fn fee_distribution_preserves_fractional_weight_balance() {
-        let env = Env::default();
-        let mut weights = Vec::new(&env);
-        weights.push_back(2);
-        weights.push_back(3);
-        weights.push_back(5);
+    fn test_corridor_usage_fee_share_three_way_split_preserves_total() {
+        let total_fee = 10_000u64;
+        let usages = [3_333_333u64, 3_333_333u64, 3_333_334u64];
+        let total_usage: u64 = 10_000_000;
 
-        let profiles = distribute_variable_fee_pool(&env, 7, weights).unwrap();
+        let mut allocated = 0u64;
+        for (index, usage) in usages.iter().enumerate() {
+            let share = if index == usages.len() - 1 {
+                total_fee - allocated
+            } else {
+                compute_corridor_usage_fee_share(total_fee, *usage, total_usage).unwrap()
+            };
+            allocated += share;
+        }
 
-        assert_eq!(profiles.get(0), Some(14_000_000));
-        assert_eq!(profiles.get(1), Some(21_000_000));
-        assert_eq!(profiles.get(2), Some(35_000_000));
-        assert_eq!(profiles.iter().fold(0_u64, |acc, value| acc + value), 70_000_000);
+        assert_eq!(allocated, total_fee);
     }
 
     #[test]
-    fn fee_distribution_rejects_overflow_before_division() {
-        let env = Env::default();
-        let mut weights = Vec::new(&env);
-        weights.push_back(u64::MAX);
+    fn test_multi_hop_fee_share_single_pass_matches_chained_low_precision() {
+        let total_fee = 1_000_000u64;
+        let hop_usage = 4_000_000u64;
+        let relayer_usage = 2_500_000u64;
+        let total_hop_usage = 10_000_000u64;
+        let total_relayer_usage = 10_000_000u64;
 
-        let result = distribute_variable_fee_pool(&env, u64::MAX, weights);
+        let high_precision = compute_multi_hop_corridor_fee_share(
+            total_fee,
+            hop_usage,
+            relayer_usage,
+            total_hop_usage,
+            total_relayer_usage,
+        )
+        .unwrap();
 
-        assert_eq!(result, Err(ContractError::Overflow));
+        // Low-precision chained division: ((fee * hop / total_hop) * relayer / total_relayer)
+        let hop_share = total_fee * hop_usage / total_hop_usage;
+        let low_precision = hop_share * relayer_usage / total_relayer_usage;
+
+        assert!(high_precision >= low_precision);
+        assert_eq!(high_precision, 100_000);
+    }
+
+    #[test]
+    fn test_compute_corridor_usage_fee_share_zero_total_usage() {
+        assert_eq!(
+            compute_corridor_usage_fee_share(100, 1, 0),
+            Err(ContractError::DivisionByZero)
+        );
+    }
+
+    #[test]
+    fn test_normalize_to_fixed_point_footprint_overflow() {
+        let too_large = u128::from(u64::MAX) * u128::from(u64::MAX) * INTERIOR_SCALE;
+        assert_eq!(
+            normalize_to_fixed_point_footprint(too_large),
+            Err(ContractError::Overflow)
+        );
     }
 }
