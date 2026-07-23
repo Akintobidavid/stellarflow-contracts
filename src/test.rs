@@ -118,6 +118,17 @@ fn test_execute_upgrade_after_timelock() {
     // Timelock should be satisfied
     let remaining = client.get_upgrade_timelock_remaining();
     assert_eq!(remaining.unwrap(), 0);
+
+    // Execute WASM code replacement via env.deployer().update_current_contract_wasm()
+    let (exec_salt, exec_signature) = nonce_proof(&env, 1, b"execute-upgrade-1");
+    client.execute_upgrade(&admin, &1, &exec_salt, &exec_signature, &u64::MAX);
+
+    // Pending upgrade record should be cleared post-upgrade
+    assert!(client.get_pending_upgrade().is_none());
+
+    // Verify underlying persistent state storage remains intact post-upgrade
+    let data = client.get_data();
+    assert_eq!(data.admin, admin);
 }
 
 #[test]
