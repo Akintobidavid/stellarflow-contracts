@@ -46,6 +46,7 @@ pub mod fees;
 pub mod governance;
 pub mod math;
 pub mod slashing;
+pub mod staging;
 pub mod staking_tiers;
 pub mod storage;
 pub mod temp_governance;
@@ -140,6 +141,10 @@ pub enum ContractError {
 
     InvalidVarianceConfig = 33,
 
+    /// Caller is not in the staging-phase tester allowlist.
+    /// Returned by any administrative pathway when staging mode is active and
+    /// the invoking address has not been explicitly authorised as a tester.
+    StagingNotAuthorized = 37,
 }
 
 // Contract state keys
@@ -152,7 +157,6 @@ pub(crate) const TOTAL_STAKED_KEY: Symbol = symbol_short!("TOTAL");
 const HEARTBEAT_KEY: Symbol = symbol_short!("HBEAT");
 const HB_INTERVAL_KEY: Symbol = symbol_short!("HBINTV");
 pub(crate) const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5 * 60;
-pub(crate) const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
 pub(crate) const VALIDATOR_STATE_KEY: Symbol = symbol_short!("VLSTATE");
 pub(crate) const REVOKED_SIGNER_KEY: Symbol = symbol_short!("REVOKED");
 const NODE_PROFILES_KEY: Symbol = symbol_short!("NODES");
@@ -162,6 +166,8 @@ const RELAYER_TTL_THRESHOLD: u32 = 5_000;
 const INSTANCE_TTL_EXTEND: u32 = 100_000;
 const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
+/// Instance-storage key for the active [`StagingConfig`].
+pub(crate) const STAGING_KEY: Symbol = symbol_short!("STAGING");
 
 #[contracttype]
 #[derive(Clone)]
@@ -397,6 +403,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &proposer)?;
         let data = Self::_load_data(&env)?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
@@ -412,6 +419,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn execute_upgrade(env: Env, executor: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &executor)?;
         let data = Self::_load_data(&env)?;
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
@@ -445,6 +453,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn cancel_upgrade(env: Env, canceller: Address) -> Result<(), ContractError> {
+        crate::staging::check_staging_access(&env, &canceller)?;
         let data = Self::_load_data(&env)?;
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
@@ -453,8 +462,49 @@ impl TimeLockedUpgradeContract {
         Ok(())
     }
 
+    // ── Staging-phase tester allowlist management ─────────────────────────────
+    //
+    // These functions expose the staging module to contract consumers.
+    // Only the admin may manage staging mode and the tester allowlist.
+    // `check_staging_access` is called internally by every administrative
+    // write pathway; these functions let the admin configure it externally.
+
+    /// Activate (`enable = true`) or deactivate (`enable = false`) staging mode.
+    ///
+    /// When active, only the admin and addresses in the tester allowlist can
+    /// invoke administrative write pathways.
+    pub fn set_staging_mode(env: Env, admin: Address, enable: bool) -> Result<(), ContractError> {
+        crate::staging::set_staging_mode(&env, &admin, enable)
+    }
+
+    /// Add an address to the staging tester allowlist.
+    ///
+    /// Idempotent: adding an address that is already present is a no-op.
+    /// The allowlist is capped at `MAX_TESTERS` entries.
+    pub fn add_staging_tester(env: Env, admin: Address, tester: Address) -> Result<(), ContractError> {
+        crate::staging::add_tester(&env, &admin, tester)
+    }
+
+    /// Remove an address from the staging tester allowlist.
+    ///
+    /// Idempotent: removing an address that is not present is a no-op.
+    pub fn remove_staging_tester(env: Env, admin: Address, tester: Address) -> Result<(), ContractError> {
+        crate::staging::remove_tester(&env, &admin, &tester)
+    }
+
+    /// Return whether staging mode is currently active.
+    pub fn is_staging_active(env: Env) -> bool {
+        crate::staging::is_staging_active(&env)
+    }
+
+    /// Return the full staging configuration (active flag + tester allowlist).
+    pub fn get_staging_config(env: Env) -> crate::staging::StagingConfig {
+        crate::staging::get_staging_config(&env)
+    }
+
     pub fn set_value(env: Env, new_value: u64, caller: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &caller)?;
         let mut data = Self::_load_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         if new_value > data.max_fee_ceiling { return Err(ContractError::FeeCeilingExceeded); }
@@ -489,6 +539,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_heartbeat_interval(env: Env, interval: u64, admin: Address) -> Result<(), ContractError> {
         if interval == 0 { return Err(ContractError::InvalidHeartbeatInterval); }
+        crate::staging::check_staging_access(&env, &admin)?;
         let data = Self::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
@@ -546,6 +597,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn upsert_node_profile(env: Env, admin: Address, node: Address, rate: u64, confidence: u32) -> Result<(), ContractError> {
+        crate::staging::check_staging_access(&env, &admin)?;
         let data = Self::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();

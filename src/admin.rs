@@ -171,6 +171,7 @@ pub fn propose_ownership_transfer(
     current_admin: Address,
     nominee: Address,
 ) -> Result<(), ContractError> {
+    crate::staging::check_staging_access(env, &current_admin)?;
     let data: ContractData = env
         .storage()
         .instance()
@@ -261,6 +262,7 @@ pub fn propose_admin_change(
     current_admin: Address,
     new_admin: Address,
 ) -> Result<(), ContractError> {
+    crate::staging::check_staging_access(env, &current_admin)?;
     let data: ContractData = env
         .storage()
         .instance()

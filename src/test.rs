@@ -1337,3 +1337,216 @@ fn test_node_profile_ttl_extension() {
     assert_eq!(rate, 100);
 }
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Staging-phase tester allowlist tests
+//
+// These tests exercise the staging access gate through the full contract
+// interface to confirm that:
+//   1. An unauthorized caller is blocked on every administrative write pathway
+//      while staging mode is active.
+//   2. An authorized tester (on the allowlist) can invoke those same pathways.
+//   3. The admin is always allowed regardless of the allowlist.
+//   4. Staging mode management itself is restricted to the admin.
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_staging_mode_off_by_default_admin_can_call_set_value() {
+    // With staging mode inactive the existing access rules still apply: the
+    // admin can call set_value without being a registered tester.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    assert!(!client.is_staging_active());
+
+    let (salt, sig) = nonce_proof(&env, 0, b"staging-off-set-value");
+    // Should succeed — staging is off so the check is a no-op.
+    client.set_value(&10, &admin, &0, &salt, &sig, &u64::MAX);
+    assert_eq!(client.get_data().value, 10);
+}
+
+#[test]
+fn test_staging_mode_management_restricted_to_admin() {
+    // A non-admin must not be able to enable or disable staging mode.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let other = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    let result = client.try_set_staging_mode(&other, &true);
+    assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+
+    // Admin should succeed.
+    client.set_staging_mode(&admin, &true);
+    assert!(client.is_staging_active());
+}
+
+#[test]
+fn test_unauthorized_tester_blocked_when_staging_is_active() {
+    // A caller that is neither the admin nor a registered tester must receive
+    // StagingNotAuthorized on every administrative write pathway.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let unauthorized = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    // Enable staging mode — no testers added yet.
+    client.set_staging_mode(&admin, &true);
+
+    // --- propose_upgrade ---
+    let wasm_hash = soroban_sdk::BytesN::from_array(&env, &[2u8; 32]);
+    let (salt, sig) = nonce_proof(&env, 0, b"staging-propose-unauthorized");
+    let result = client.try_propose_upgrade(&wasm_hash, &unauthorized, &0, &salt, &sig, &u64::MAX);
+    assert_eq!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+
+    // --- set_value ---
+    let (salt2, sig2) = nonce_proof(&env, 0, b"staging-set-value-unauthorized");
+    let result = client.try_set_value(&99, &unauthorized, &0, &salt2, &sig2, &u64::MAX);
+    assert_eq!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+
+    // --- set_heartbeat_interval ---
+    let result = client.try_set_heartbeat_interval(&120, &unauthorized);
+    assert_eq!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+
+    // --- cancel_upgrade (no pending upgrade needed — staging check fires first) ---
+    let result = client.try_cancel_upgrade(&unauthorized);
+    assert_eq!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+}
+
+#[test]
+fn test_authorized_tester_allowed_when_staging_is_active() {
+    // A caller explicitly added to the tester allowlist must be able to invoke
+    // administrative write pathways even though they are not the admin.
+    //
+    // NOTE: The staging check passes, but the subsequent `NotAdmin` check will
+    // reject the call because testers are not admins. The important property
+    // here is that the error is NOT `StagingNotAuthorized` — the caller cleared
+    // the staging gate.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let tester = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    client.set_staging_mode(&admin, &true);
+    client.add_staging_tester(&admin, &tester);
+
+    let cfg = client.get_staging_config();
+    assert_eq!(cfg.testers.len(), 1);
+    assert_eq!(cfg.testers.get(0).unwrap(), tester);
+
+    // The tester clears the staging gate but hits NotAdmin because they are
+    // not the contract admin — this is the correct and expected behaviour.
+    let (salt, sig) = nonce_proof(&env, 0, b"staging-tester-set-value");
+    let result = client.try_set_value(&55, &tester, &0, &salt, &sig, &u64::MAX);
+    // Must NOT be StagingNotAuthorized — the staging gate was cleared.
+    assert_ne!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+    // Downstream guard rejects because tester != admin.
+    assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+}
+
+#[test]
+fn test_admin_always_passes_staging_gate() {
+    // The contract admin must always be able to invoke administrative pathways
+    // regardless of whether staging mode is active and whether they are in the
+    // tester allowlist.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    // Enable staging mode — the admin is NOT added to the tester allowlist.
+    client.set_staging_mode(&admin, &true);
+
+    // Admin can still call set_heartbeat_interval.
+    client.set_heartbeat_interval(&300, &admin);
+    assert_eq!(client.get_heartbeat_interval(), 300);
+
+    // Admin can still call set_value.
+    let (salt, sig) = nonce_proof(&env, 0, b"staging-admin-set-value");
+    client.set_value(&7, &admin, &0, &salt, &sig, &u64::MAX);
+    assert_eq!(client.get_data().value, 7);
+}
+
+#[test]
+fn test_removing_staging_mode_unblocks_callers() {
+    // After staging mode is disabled, any caller (subject to the existing
+    // NotAdmin guard) should no longer receive StagingNotAuthorized.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let other = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    client.set_staging_mode(&admin, &true);
+
+    // While staging is on, `other` is blocked.
+    let result = client.try_set_heartbeat_interval(&60, &other);
+    assert_eq!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+
+    // Disable staging mode.
+    client.set_staging_mode(&admin, &false);
+    assert!(!client.is_staging_active());
+
+    // Now `other` clears the staging gate but hits NotAdmin — correct.
+    let result = client.try_set_heartbeat_interval(&60, &other);
+    assert_ne!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+    assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+}
+
+#[test]
+fn test_add_and_remove_staging_tester_lifecycle() {
+    // Verify the full lifecycle: add a tester, confirm they pass, remove them,
+    // confirm they are blocked again.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let tester = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    client.set_staging_mode(&admin, &true);
+
+    // Before adding: tester is blocked.
+    let result = client.try_set_heartbeat_interval(&60, &tester);
+    assert_eq!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+
+    // Add tester.
+    client.add_staging_tester(&admin, &tester);
+
+    // After adding: staging gate clears; downstream NotAdmin fires instead.
+    let result = client.try_set_heartbeat_interval(&60, &tester);
+    assert_ne!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+    assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+
+    // Remove tester.
+    client.remove_staging_tester(&admin, &tester);
+
+    // After removal: staging gate blocks again.
+    let result = client.try_set_heartbeat_interval(&60, &tester);
+    assert_eq!(result, Err(Ok(ContractError::StagingNotAuthorized)));
+}
