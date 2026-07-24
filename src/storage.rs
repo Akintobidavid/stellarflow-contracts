@@ -55,6 +55,13 @@ pub struct AssetMetricsKey(Symbol);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CorridorFeeKey(Symbol);
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeedStakeValue {
+    pub amount: u64,
+    pub last_active: u64,
+}
+
 pub const RENT_THRESHOLD: u32 = 259_200;
 pub const RENT_EXTEND_TO: u32 = 518_400;
 
@@ -81,8 +88,6 @@ pub fn extend_subscription_rent(env: &Env, consumer_id: Address) {
     env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
 }
 
-pub fn preflight_rent_check(_env: &Env) {}
-
 pub fn check_subscription(env: &Env, consumer_id: Address) -> bool {
     let key = DataKey::Subscription(consumer_id.clone());
     if env.storage().persistent().has(&key) {
@@ -93,11 +98,6 @@ pub fn check_subscription(env: &Env, consumer_id: Address) -> bool {
     }
 }
 
-/// Pre-flight rent check for storage entries
-pub fn preflight_rent_check(env: &Env) {
-    // This hook can be extended to check TTL of critical storage entries
-    // before executing operations that depend on them.
-    // Currently a no-op placeholder for future rent management.
 pub fn extend_asset_rent(env: &Env, asset: Symbol) -> bool {
     let key = DataKey::AssetPrice(asset);
     if env.storage().persistent().has(&key) {
