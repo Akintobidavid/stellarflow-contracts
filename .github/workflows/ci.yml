@@ -39,3 +39,8 @@ jobs:
 
       - name: Build WASM
         run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Check WASM size
+        run: |
+          chmod +x check_size.sh
+          ./check_size.sh
