@@ -357,6 +357,10 @@ impl TimeLockedUpgradeContract {
         }
 
         proposal.votes.push_back(voter);
+        env.storage().temporary().set(&REVOCATION_KEY, &proposal);
+        Ok(())
+    }
+
     pub fn vote_revocation(env: Env, voter: Address, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         voter.require_auth();
@@ -389,10 +393,6 @@ impl TimeLockedUpgradeContract {
 
     pub fn get_data(env: Env) -> Result<ContractData, ContractError> {
         Self::_load_data(&env)
-    }
-
-    fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
-        env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
     }
 
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
@@ -474,13 +474,6 @@ impl TimeLockedUpgradeContract {
         let asset_id = symbol_to_asset_id(&asset);
         let heartbeat_key = HeartbeatKey(asset_id);
         env.storage().temporary().get(&heartbeat_key)
-    pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
-        let timestamps: Map<AssetId, u64> = env
-            .storage()
-            .temporary()
-            .get(&HEARTBEAT_KEY)
-            .unwrap_or_else(|| Map::new(&env));
-        timestamps.get(asset)
     }
 
     pub fn get_heartbeat_interval(env: Env) -> u64 {
@@ -539,8 +532,6 @@ impl TimeLockedUpgradeContract {
     pub fn is_data_fresh(env: Env, asset: AssetId) -> bool {
         let heartbeat_key = HeartbeatKey(asset);
         if let Some(last_update) = env.storage().temporary().get(&heartbeat_key) {
-        let timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
-        if let Some(last_update) = timestamps.get(asset) {
             env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)
         } else { false }
     }
@@ -582,15 +573,6 @@ impl TimeLockedUpgradeContract {
         pool.collected = pool.collected.checked_add(collected).ok_or(ContractError::Overflow)?;
         pool.variable_pool = pool.variable_pool.checked_add(variable_fee).ok_or(ContractError::Overflow)?;
         env.storage().persistent().set(&fee_key, &pool);
-    pub fn add_corridor_fees(
-        env: Env,
-        admin: Address,
-        asset: AssetId,
-        collected: u64,
-        variable_fee: u64,
-    ) -> Result<fees::CorridorFeePool, ContractError> {
-        let pool = fees::add_corridor_fees(env.clone(), admin, asset, collected, variable_fee)?;
-        Self::_extend_instance_ttl(&env);
         Ok(pool)
     }
 
@@ -692,8 +674,8 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _resolve_feed_metrics(env: &Env, asset: &Symbol) -> AssetFeedMetrics {
-        let pool = Self::get_corridor_fee_pool(env.clone(), asset.clone());
-        let metrics_key = AssetMetricsKey(asset.clone());
+        let asset_id = symbol_to_asset_id(asset);
+        let metrics_key = AssetMetricsKey(asset_id);
         let stored: AssetFeedMetrics = env
             .storage()
             .persistent()
@@ -702,9 +684,9 @@ impl TimeLockedUpgradeContract {
                 volume_score: 0,
                 volatility_bps: 0,
             });
+        stored
+    }
 
-
-    /// Return the minimum stake a validator must post for a currency feed.
     pub fn get_required_stake(env: Env, asset: AssetId) -> u64 {
         let tier = Self::get_staking_tier(env.clone(), asset);
         let config = Self::get_staking_tier_config(env);
@@ -725,7 +707,6 @@ impl TimeLockedUpgradeContract {
         admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
 
-        let feed_key = FeedStakeKey(node.clone(), asset.clone());
         let feed_key = StakingStorageKey::FeedStake(node.clone(), asset);
         if env.storage().persistent().has(&feed_key) {
             return Err(ContractError::FeedAlreadyRegistered);
@@ -766,10 +747,6 @@ impl TimeLockedUpgradeContract {
             asset,
             amount,
             tier,
-
-
-       ,
-
             registered_at: env.ledger().timestamp(),
         })
     }
@@ -778,7 +755,6 @@ impl TimeLockedUpgradeContract {
     pub fn unstake_from_feed(env: Env, node: Address, asset: AssetId) -> Result<u64, ContractError> {
         node.require_auth();
 
-        let feed_key = FeedStakeKey(node.clone(), asset.clone());
         let feed_key = StakingStorageKey::FeedStake(node.clone(), asset);
         let stake_val: storage::FeedStakeValue = env
             .storage()
@@ -810,22 +786,16 @@ impl TimeLockedUpgradeContract {
         Ok(amount)
     }
 
-    /// Return the collateral posted by a node for a specific currency feed.
-    pub fn get_feed_stake(env: Env, node: Address, asset: Symbol) -> u64 {
-        let feed_key = FeedStakeKey(node, asset);
     pub fn get_feed_stake(env: Env, node: Address, asset: AssetId) -> u64 {
         storage::check_and_prune_feed_stake(&env, node.clone(), asset);
         let feed_key = StakingStorageKey::FeedStake(node, asset);
         let stake_val: Option<storage::FeedStakeValue> = env
             .storage()
             .persistent()
-            .get(&feed_key)
-            .unwrap_or(0)
+            .get(&feed_key);
+        stake_val.map(|v| v.amount).unwrap_or(0)
     }
 
-    pub fn get_corridor_fee_pool(env: Env, asset: Symbol) -> CorridorFeePool {
-        let fee_key = CorridorFeeKey(asset.clone());
-        env.storage().persistent().get(&fee_key).unwrap_or(CorridorFeePool { asset, collected: 0, variable_pool: 0 })
     pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
         env.storage()
             .persistent()
@@ -1130,7 +1100,6 @@ impl TimeLockedUpgradeContract {
         }
     }
 
-    pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
     pub fn update_validator_profile(
         env: Env,
         node: Address,
