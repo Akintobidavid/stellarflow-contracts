@@ -552,6 +552,7 @@ impl TimeLockedUpgradeContract {
         let profile_key = NodeProfileKey(node.clone());
         let profile = NodeProfile { node, rate, confidence, updated_at: env.ledger().timestamp() };
         env.storage().persistent().set(&profile_key, &profile);
+        storage::extend_persistent_ttl(&env, &profile_key);
         let mut profiles = Self::_get_node_profiles(&env);
         profiles.set(
             node.clone(),
@@ -565,6 +566,7 @@ impl TimeLockedUpgradeContract {
         env.storage()
             .persistent()
             .set(&NODE_PROFILES_KEY, &profiles);
+        storage::extend_persistent_ttl(&env, &NODE_PROFILES_KEY);
         Self::_extend_instance_ttl(&env);
         Ok(())
     }
@@ -677,6 +679,9 @@ impl TimeLockedUpgradeContract {
         env.storage()
             .persistent()
             .set(&metrics_key, &metrics);
+        storage::extend_persistent_ttl(&env, &metrics_key);
+        env.storage()
+            .instance()
             .set(&StakingStorageKey::AssetMetrics(asset), &metrics);
 
         Self::_extend_instance_ttl(&env);
@@ -742,7 +747,7 @@ impl TimeLockedUpgradeContract {
             last_active: env.ledger().timestamp(),
         };
         env.storage().persistent().set(&feed_key, &stake_val);
-        env.storage().persistent().extend_ttl(&feed_key, storage::RENT_THRESHOLD, storage::RENT_EXTEND_TO);
+        storage::extend_persistent_ttl(&env, &feed_key);
 
         let stake_key = StakeKey(node.clone());
         let node_total: u64 = env.storage().instance().get(&stake_key).unwrap_or(0);

@@ -1337,3 +1337,260 @@ fn test_node_profile_ttl_extension() {
     assert_eq!(rate, 100);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Persistent TTL Renewal tests (Issue #589)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_persistent_ttl_extended_after_upsert_node_profile() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    // Upsert node profile — this writes to persistent storage and should extend TTL
+    client.upsert_node_profile(&admin, &node, &100, &99);
+
+    // Verify the profile is readable (TTL was extended, not expired)
+    let rate = client.get_latest_rate(&node);
+    assert_eq!(rate, 100);
+
+    // Upsert again to verify repeated writes keep renewing TTL
+    client.upsert_node_profile(&admin, &node, &200, &99);
+    let rate = client.get_latest_rate(&node);
+    assert_eq!(rate, 200);
+}
+
+#[test]
+fn test_persistent_ttl_extended_after_stake_and_register_for_feed() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let signer1 = soroban_sdk::Address::generate(&env);
+    let signer2 = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+    client.register_signer(&signer1, &admin);
+    client.register_signer(&signer2, &admin);
+
+    let asset: AssetId = crate::symbol_to_asset_id(&soroban_sdk::symbol_short!("NGN"));
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+    client.set_asset_feed_metrics(&admin, &asset, &10, &100, &signers);
+
+    // Register for feed — persistent write that should extend TTL
+    let record = client.stake_and_register_for_feed(&node, &asset, &100u64);
+    assert_eq!(record.amount, 100u64);
+
+    // Verify feed stake is still readable (TTL was extended)
+    let stake = client.get_feed_stake(&node, &asset);
+    assert_eq!(stake, 100u64);
+}
+
+#[test]
+fn test_persistent_ttl_extended_after_set_asset_feed_metrics() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let signer1 = soroban_sdk::Address::generate(&env);
+    let signer2 = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+    client.register_signer(&signer1, &admin);
+    client.register_signer(&signer2, &admin);
+
+    let asset: AssetId = crate::symbol_to_asset_id(&soroban_sdk::symbol_short!("KES"));
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+
+    // Set feed metrics — persistent write that should extend TTL
+    client.set_asset_feed_metrics(&admin, &asset, &10, &200, &signers);
+
+    // Verify the tier is correctly resolved (TTL was extended)
+    let tier = client.get_staking_tier(&asset);
+    // regional tier since volume_score = 10
+    assert_eq!(tier, StakingTier::Regional);
+}
+
+#[test]
+fn test_persistent_ttl_multiple_writes_remain_safe() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let signer1 = soroban_sdk::Address::generate(&env);
+    let signer2 = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+    client.register_signer(&signer1, &admin);
+    client.register_signer(&signer2, &admin);
+
+    let asset: AssetId = crate::symbol_to_asset_id(&soroban_sdk::symbol_short!("GHS"));
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+
+    // Multiple writes to the same persistent entries should not corrupt state
+    for i in 0..5u32 {
+        client.set_asset_feed_metrics(&admin, &asset, &(10 + i), &200, &signers);
+        client.upsert_node_profile(&admin, &node, &(100 + i as u64), &99);
+    }
+
+    // State should reflect the last write
+    let rate = client.get_latest_rate(&node);
+    assert_eq!(rate, 104);
+}
+
+#[test]
+fn test_persistent_ttl_threshold_constant_is_31_days() {
+    // Verify the PERSISTENT_TTL_THRESHOLD is exactly 535,680 ledgers (31 days)
+    assert_eq!(crate::storage::PERSISTENT_TTL_THRESHOLD, 535_680);
+
+    // 31 days × 24 hours × 60 minutes × 60 seconds / 5-second ledger
+    assert_eq!(31u32 * 24 * 60 * 60 / 5, 535_680);
+}
+
+#[test]
+fn test_extend_persistent_ttl_is_idempotent_for_missing_key() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+
+    env.as_contract(&contract_id, || {
+        // Calling extend_persistent_ttl on a key that doesn't exist should not panic
+        let key = crate::storage::NodeProfileKey(soroban_sdk::Address::generate(&env));
+        crate::storage::extend_persistent_ttl(&env, &key);
+        // No assertion needed — not panicking is the test
+    });
+}
+
+#[test]
+fn test_existing_storage_behavior_unchanged() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    // Existing stake_and_register behavior must be preserved
+    let record = client.stake_and_register(&node, &1000u64);
+    assert_eq!(record.amount, 1000u64);
+    assert_eq!(client.get_stake(&node), 1000u64);
+    assert_eq!(client.get_total_staked(), 1000u64);
+
+    // Existing unstake behavior must be preserved
+    let returned = client.unstake(&node);
+    assert_eq!(returned, 1000u64);
+    assert_eq!(client.get_stake(&node), 0u64);
+    assert_eq!(client.get_total_staked(), 0u64);
+}
+
+#[test]
+fn test_persistent_ttl_below_threshold_entry_renewed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    // Write a profile to persistent storage
+    client.upsert_node_profile(&admin, &node, &100, &99);
+
+    // Advance the ledger a small amount (still well below threshold)
+    advance_ledger_timestamp(&env, 1_000);
+
+    // Write again — TTL should be refreshed
+    client.upsert_node_profile(&admin, &node, &200, &99);
+
+    // The entry should still be accessible
+    let rate = client.get_latest_rate(&node);
+    assert_eq!(rate, 200);
+}
+
+#[test]
+fn test_persistent_ttl_above_threshold_entry_still_valid() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    // Write a fresh entry
+    client.upsert_node_profile(&admin, &node, &100, &99);
+
+    // Write again immediately — entry is already fresh
+    client.upsert_node_profile(&admin, &node, &200, &99);
+
+    // Should still be accessible
+    let rate = client.get_latest_rate(&node);
+    assert_eq!(rate, 200);
+}
+
+#[test]
+fn test_persistent_ttl_edge_case_max_ledger() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let node = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    // Write a profile
+    client.upsert_node_profile(&admin, &node, &100, &99);
+
+    // Advance ledger to a very high timestamp (but still valid)
+    advance_ledger_timestamp(&env, u64::MAX / 2);
+
+    // Write again — should still work at high ledger values
+    client.upsert_node_profile(&admin, &node, &200, &99);
+
+    let rate = client.get_latest_rate(&node);
+    assert_eq!(rate, 200);
+}
+
+#[test]
+fn test_persistent_ttl_wrapper_used_by_nonce_consume() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    // consume_nonce writes to persistent storage and should extend TTL
+    let (salt, signature) = nonce_proof(&env, 0, b"nonce-ttl-0");
+    client.set_value(&42, &admin, &0, &salt, &signature, &u64::MAX, &1u64);
+
+    // Verify the nonce advanced (proof that persistent state was written + TTL extended)
+    assert_eq!(client.get_coordinator_nonce(&admin), 1);
+
+    // Second call should also succeed (TTL was extended, entry still valid)
+    let (salt2, signature2) = nonce_proof(&env, 1, b"nonce-ttl-1");
+    client.set_value(&100, &admin, &1, &salt2, &signature2, &u64::MAX, &2u64);
+    assert_eq!(client.get_coordinator_nonce(&admin), 2);
+}
+

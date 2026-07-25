@@ -75,6 +75,7 @@ fn consume_admin_nonce(
         return Err(ContractError::InvalidNonce);
     }
     env.storage().persistent().set(&key, &(expected + 1u64));
+    crate::storage::extend_persistent_ttl(env, &key);
     Ok(())
 }
 
