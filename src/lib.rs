@@ -1,5 +1,15 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
+
+contractmeta!(
+    name = "stellarflow-contracts",
+    version = env!("CARGO_PKG_VERSION"),
+    author = "StellarFlow Network",
+    description = env!("CARGO_PKG_DESCRIPTION"),
+    interface = "stellarflow-v1",
+    build_time = env!("BUILD_TIME"),
+    git_sha = env!("GIT_SHA"),
+);
 
 /// Numeric asset identifier for gas-optimized storage.
 /// Replaces heavy Symbol identifiers in high-frequency paths.
