@@ -66,7 +66,9 @@ fn test_propose_upgrade() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-0");
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     let pending = client.get_pending_upgrade();
     assert!(pending.is_some());
@@ -110,7 +112,9 @@ fn test_execute_upgrade_after_timelock() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-1");
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     // Fast forward time by 48 hours
     advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
@@ -144,7 +148,9 @@ fn test_cancel_upgrade() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-2");
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
     assert!(client.get_pending_upgrade().is_some());
 
     client.cancel_upgrade(&admin);
@@ -166,7 +172,9 @@ fn test_timelock_countdown() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-3");
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     let remaining = client.get_upgrade_timelock_remaining().unwrap();
     assert_eq!(remaining, 5000);
@@ -799,7 +807,9 @@ fn test_expired_signature_rejected() {
 
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-expired");
-    let result = client.try_propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &expired_at);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    let result = client.try_propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &expired_at);
     assert_eq!(result, Err(Ok(ContractError::SignatureExpired)));
 
     let (salt2, signature2) = nonce_proof(&env, 0, b"set-value-expired");
