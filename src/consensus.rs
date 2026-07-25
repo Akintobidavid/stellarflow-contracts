@@ -1,4 +1,5 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
+use crate::events::{emit_simple2, EV_FALLBACK_WARN};
 use crate::ContractError;
 use crate::storage::SequenceKey;
 use crate::ContractError;
@@ -180,8 +181,10 @@ pub fn get_price_with_fallback(env: &Env, asset: Symbol, fallback_rate: i64) -> 
         Ok(price) => PriceResult::Live(price),
         Err(_) => {
             // Emit a warning event for observability.
-            env.events().publish(
-                (symbol_short!("FallbackW"), asset),
+            let _ = emit_simple2(
+                &env,
+                EV_FALLBACK_WARN,
+                asset,
                 (fallback_rate, WARNING_ORACLE_OFFLINE),
             );
             PriceResult::Fallback(fallback_rate, WARNING_ORACLE_OFFLINE)

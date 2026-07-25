@@ -58,11 +58,13 @@ pub mod math;
 pub mod slashing;
 pub mod staking_tiers;
 pub mod amm;
+pub mod events;
 pub mod router;
 pub mod settlement;
 pub mod storage;
 pub mod temp_governance;
 pub mod validation;
+use crate::events::{emit_simple2, EV_TELEMETRY_OK};
 use crate::governance::{verify_staged_delay, StagedUpgrade};
 use crate::validation::{check_bond_capacity, validate_telemetry_submission};
 use crate::governance::{
@@ -200,6 +202,10 @@ pub enum ContractError {
     DeadlineTooFar = 56,
     /// The depositor has exceeded the maximum number of active HTLCs.
     TooManyActiveHtlcs = 57,
+
+    // ── Event standardization errors ────────────────────────────────────
+    /// Event topic vector exceeds the maximum allowed indexed symbols.
+    EventTopicLimitExceeded = 58,
 
 }
 
@@ -1279,8 +1285,10 @@ impl TimeLockedUpgradeContract {
         Self::_record_heartbeat(&env, symbol_to_asset_id(&pool));
 
         // Emit event for monitoring
-        env.events().publish(
-            (soroban_sdk::symbol_short!("telem_ok"),),
+        let _ = emit_simple2(
+            &env,
+            EV_TELEMETRY_OK,
+            symbol_short!("telem"),
             (node, pool, payload_timestamp),
         );
 
