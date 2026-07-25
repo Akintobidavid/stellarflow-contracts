@@ -1,3 +1,9 @@
+//! Gas-optimized storage keys and helper utilities for the StellarFlow contract.
+//!
+//! This module defines all [`contracttype`] storage keys used across the contract,
+//! replacing dynamic Map structures with fixed-size tuple keys for gas efficiency.
+//! It also provides helper functions for node profile management, subscription
+//! rent extension, and asset price TTL management.
 use soroban_sdk::{contracttype, Address, Env, Symbol, Map};
 use crate::NodeProfile;
 
@@ -6,7 +12,9 @@ use crate::NodeProfile;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
+    /// Subscription record keyed by consumer [`Address`].
     Subscription(Address),
+    /// Asset price entry keyed by a [`Symbol`].
     AssetPrice(Symbol),
 }
 
