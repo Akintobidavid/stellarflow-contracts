@@ -241,6 +241,7 @@ pub fn claim_ownership(env: &Env, claimer: Address) -> Result<(), ContractError>
     data.admin = claimer;
     env.storage().instance().set(&DATA_KEY, &data);
     env.storage().instance().remove(&PENDING_OWNER_KEY);
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
@@ -350,6 +351,7 @@ pub fn propose_admin_change(
             proposed_at: env.ledger().timestamp(),
         },
     );
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
@@ -436,6 +438,7 @@ pub fn execute_admin_change_by_timelock(
     contract_data.admin = proposal.new_admin;
     env.storage().instance().set(&DATA_KEY, &contract_data);
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
@@ -463,6 +466,7 @@ pub fn cancel_admin_change(
     canceller.require_auth();
 
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
@@ -497,6 +501,7 @@ pub fn purge_emergency_revocation_proposal(env: &Env) -> Result<(), ContractErro
         remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
     }
 
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
