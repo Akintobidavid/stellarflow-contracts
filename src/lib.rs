@@ -59,6 +59,7 @@ pub mod slashing;
 pub mod staking_tiers;
 pub mod amm;
 pub mod router;
+pub mod settlement;
 pub mod storage;
 pub mod temp_governance;
 pub mod validation;
@@ -181,6 +182,24 @@ pub enum ContractError {
     TickOutOfBounds = 48,
     /// The pool has too many initialized ticks.
     TooManyTicks = 49,
+
+    // ── HTLC settlement errors ─────────────────────────────────────────
+    /// No HTLC exists with the given identifier.
+    HtlcNotFound = 50,
+    /// The HTLC has already been settled (claimed or refunded).
+    HtlcNotActive = 51,
+    /// The provided pre-image does not hash to the stored hash-lock.
+    InvalidPreImage = 52,
+    /// The HTLC deadline has not yet been reached (for refund).
+    DeadlineNotReached = 53,
+    /// The HTLC deadline has already been reached (for claim).
+    DeadlineReached = 54,
+    /// The HTLC deadline is too close to the current ledger.
+    DeadlineTooSoon = 55,
+    /// The HTLC deadline exceeds the maximum allowed offset.
+    DeadlineTooFar = 56,
+    /// The depositor has exceeded the maximum number of active HTLCs.
+    TooManyActiveHtlcs = 57,
 
 }
 
