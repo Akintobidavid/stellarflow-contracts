@@ -49,8 +49,10 @@ pub mod slashing;
 pub mod staking_tiers;
 pub mod storage;
 pub mod temp_governance;
+pub mod upgrades;
 pub mod validation;
 use crate::governance::{verify_staged_delay, StagedUpgrade};
+use crate::upgrades::migration::{ensure_schema_version, SCHEMA_VERSION};
 use crate::validation::{check_bond_capacity, validate_telemetry_submission};
 use crate::governance::{
     verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot,
@@ -224,6 +226,7 @@ pub struct TimeLockedUpgradeContract;
 #[contractimpl]
 impl TimeLockedUpgradeContract {
     pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
+        ensure_schema_version(&env)?;
         if env.storage().instance().has(&DATA_KEY) {
             return Err(ContractError::AlreadyInitialized);
         }
@@ -384,15 +387,12 @@ impl TimeLockedUpgradeContract {
     // --- Core Logic Boilerplate ---
 
     fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
+        let _ = ensure_schema_version(env);
         env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
     }
 
     pub fn get_data(env: Env) -> Result<ContractData, ContractError> {
         Self::_load_data(&env)
-    }
-
-    fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
-        env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
     }
 
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
@@ -471,10 +471,12 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_last_update_timestamp(env: Env, asset: Symbol) -> Option<u64> {
+        let _ = ensure_schema_version(&env);
         let asset_id = symbol_to_asset_id(&asset);
         let heartbeat_key = HeartbeatKey(asset_id);
         env.storage().temporary().get(&heartbeat_key)
     pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
+        let _ = ensure_schema_version(&env);
         let timestamps: Map<AssetId, u64> = env
             .storage()
             .temporary()
@@ -484,6 +486,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_heartbeat_interval(env: Env) -> u64 {
+        let _ = ensure_schema_version(&env);
         Self::_get_interval(&env)
     }
 
@@ -498,6 +501,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_stake(env: Env, node: Address) -> u64 {
+        let _ = ensure_schema_version(&env);
         let stake_key = StakeKey(node);
         env.storage().instance().get(&stake_key).unwrap_or(0u64)
         let stakes: Map<Address, u64> = env
@@ -509,6 +513,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_total_staked(env: Env) -> u64 {
+        let _ = ensure_schema_version(&env);
         env.storage()
             .instance()
             .get(&TOTAL_STAKED_KEY)
@@ -1019,6 +1024,7 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _record_heartbeat(env: &Env, asset: AssetId) {
+        let _ = ensure_schema_version(env);
         let heartbeat_key = HeartbeatKey(asset);
         env.storage().temporary().set(&heartbeat_key, &env.ledger().timestamp());
         let mut timestamps: Map<AssetId, u64> = env

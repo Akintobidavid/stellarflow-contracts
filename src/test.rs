@@ -32,6 +32,57 @@ fn nonce_proof(env: &Env, nonce: u64, salt_seed: &[u8]) -> (Bytes, soroban_sdk::
 // ═════════════════════════════════════════════════════════════════════════════
 
 #[test]
+fn test_schema_version_migration_converts_legacy_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+
+    let legacy_profiles_key = soroban_sdk::Symbol::new(&env, "NODES");
+    let legacy_signers_key = soroban_sdk::Symbol::new(&env, "SIGNERS");
+    let legacy_stakes_key = soroban_sdk::Symbol::new(&env, "STAKES");
+    let legacy_total_key = soroban_sdk::Symbol::new(&env, "TOTAL");
+    let legacy_heartbeat_key = soroban_sdk::Symbol::new(&env, "HBEAT");
+
+    let mut profiles = soroban_sdk::Map::new(&env);
+    profiles.set(admin.clone(), crate::NodeProfile {
+        node: admin.clone(),
+        rate: 42,
+        confidence: 90,
+        updated_at: 1,
+    });
+    env.storage().instance().set(&legacy_profiles_key, &profiles);
+
+    let mut signers = soroban_sdk::Map::new(&env);
+    signers.set(admin.clone(), true);
+    env.storage().instance().set(&legacy_signers_key, &signers);
+
+    let mut stakes = soroban_sdk::Map::new(&env);
+    stakes.set(admin.clone(), 123u64);
+    env.storage().instance().set(&legacy_stakes_key, &stakes);
+    env.storage().instance().set(&legacy_total_key, &123u64);
+
+    let mut heartbeats = soroban_sdk::Map::new(&env);
+    heartbeats.set(0u32, 7u64);
+    env.storage().instance().set(&legacy_heartbeat_key, &heartbeats);
+
+    client.initialize(&admin, &treasury);
+
+    let data = client.get_data();
+    assert_eq!(data.admin, admin);
+    assert_eq!(data.value, 0);
+
+    assert!(env.storage().persistent().has(&crate::storage::NodeProfileKey(admin.clone())));
+    assert!(env.storage().instance().has(&crate::storage::SignerKey(admin.clone())));
+    assert!(env.storage().instance().has(&crate::storage::StakeKey(admin.clone())));
+    assert_eq!(env.storage().instance().get(&crate::TOTAL_STAKED_KEY).unwrap(), 123u64);
+    assert!(env.storage().temporary().has(&crate::storage::HeartbeatKey(0u32)));
+}
+
+#[test]
 fn test_initialize_and_basic_functionality() {
     let env = Env::default();
     env.mock_all_auths();
