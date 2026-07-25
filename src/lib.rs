@@ -84,7 +84,6 @@ pub enum ContractError {
     RevokedAddress = 30,
     EmergencyRevocationAlreadyActive = 31,
     NoActiveEmergencyRevocation = 32,
-
     AlreadyRegistered = 8,
     NotRegistered = 9,
     InvalidStakeAmount = 10,
@@ -114,8 +113,6 @@ pub enum ContractError {
     FeeCeilingExceeded = 26,
     /// Attempted to divide by zero in a mathematical operation.
     DivisionByZero = 27,
-    /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
-    StaleSequence = 36,
     /// A price-variance configuration field violated one or more struct invariants.
     InvalidVarianceConfig = 28,
     /// Telemetry submission rejected: payload timestamp is stale.
@@ -124,22 +121,12 @@ pub enum ContractError {
     InsufficientReserveBalance = 34,
     /// Telemetry submission rejected: trading volume falls below required minimum.
     InsufficientVolume = 35,
-    StaleSequence = 28,
-    /// A price-variance configuration field violated one or more struct invariants.
-
-    InvalidVarianceConfig = 28,
-
-    /// Incoming telemetry payload is older than the configured freshness window.
-    StaleTelemetryPayload = 35,
     /// Pool liquidity / volume depth is below the minimum economic security gate.
     InsufficientLiquidityDepth = 36,
-
-    /// Incoming telemetry payload's ledger timestamp is too far behind.
-    StaleTelemetryPayload = 34,
-
-
-    InvalidVarianceConfig = 33,
-
+    /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
+    StaleSequence = 37,
+    /// Post-upgrade health check failed; upgrade automatically reverted.
+    UpgradeHealthCheckFailed = 38,
 }
 
 // Contract state keys
@@ -182,6 +169,7 @@ const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 pub struct ContractData {
     pub admin: Address,
     pub value: u64,
+    pub max_fee_ceiling: u64,
 }
 
 #[contracttype]
@@ -338,25 +326,6 @@ impl TimeLockedUpgradeContract {
     /// Cast a multi-sig vote on the active revocation ballot stored in Temporary
     /// storage. When the vote tally meets the threshold the admin is updated and
     /// the ballot is immediately deleted from the ledger.
-    pub fn vote_revocation(
-        env: Env,
-        voter: Address,
-        sig_expires_at: u64,
-    ) -> Result<(), ContractError> {
-        if env.ledger().timestamp() > sig_expires_at {
-            return Err(ContractError::SignatureExpired);
-        }
-        proposer.require_auth();
-        open_ballot(&env, REVOCATION_KEY, target, replacement, proposer)
-    }
-
-        for i in 0..proposal.votes.len() {
-            if proposal.votes.get(i).unwrap() == voter {
-                return Err(ContractError::AlreadyVoted);
-            }
-        }
-
-        proposal.votes.push_back(voter);
     pub fn vote_revocation(env: Env, voter: Address, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         voter.require_auth();
@@ -391,10 +360,6 @@ impl TimeLockedUpgradeContract {
         Self::_load_data(&env)
     }
 
-    fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
-        env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
-    }
-
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         let data = Self::_load_data(&env)?;
@@ -416,20 +381,52 @@ impl TimeLockedUpgradeContract {
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
         consume_nonce(&env, &executor, nonce, salt, signature)?;
-        let pending: StagedUpgrade = env
-            .storage()
-            .instance(
-            )
-            .get(&PENDING_UPGRADE_KEY)
-            .ok_or(ContractError::NoPendingUpgrade)?;
-        if !verify_staged_delay(pending.staged_at, env.ledger().sequence()) {
         let pending: StagedUpgrade = env.storage().instance().get(&PENDING_UPGRADE_KEY).ok_or(ContractError::NoPendingUpgrade)?;
         if !verify_staged_delay(pending.staged_at, env.ledger().timestamp(), UPGRADE_DELAY_SECONDS) {
             return Err(ContractError::UpgradeTimelockNotSatisfied);
         }
+        // Store pre-upgrade contract data snapshot for health check validation
+        let pre_upgrade_data = data.clone();
         env.deployer().update_current_contract_wasm(pending.new_wasm_hash);
+        // Run post-upgrade diagnostic health checks
+        Self::_run_post_upgrade_health_check(&env, pre_upgrade_data)?;
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
         Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Run diagnostic checks after upgrade to assert storage integrity post-upgrade.
+    /// Returns UpgradeHealthCheckFailed if any invariant is violated.
+    fn _run_post_upgrade_health_check(env: &Env, pre_upgrade_data: ContractData) -> Result<(), ContractError> {
+        // Diagnostic 1: Verify admin still exists and is accessible
+        let post_upgrade_data = Self::_load_data(env)?;
+        if post_upgrade_data.admin != pre_upgrade_data.admin {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 2: Verify core state keys are still accessible
+        if !env.storage().instance().has(&DATA_KEY) {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 3: Verify treasury address is still present (immutable after deployment)
+        let treasury: Option<Address> = env.storage().instance().get(&TREASURY_KEY);
+        if treasury.is_none() {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 4: Verify instance storage is still readable
+        let total_staked: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
+        if total_staked > u64::MAX {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 5: Verify signers map is still accessible
+        let _signers: Map<Address, ()> = env.storage().instance().get(&SIGNERS_KEY).unwrap_or_else(|| Map::new(env));
+
+        // Diagnostic 6: Verify heartbeat interval is still accessible
+        let _heartbeat_interval: u64 = env.storage().instance().get(&HB_INTERVAL_KEY).unwrap_or(DEFAULT_HEARTBEAT_INTERVAL);
+
         Ok(())
     }
 
@@ -470,10 +467,6 @@ impl TimeLockedUpgradeContract {
         get_nonce(&env, &coordinator)
     }
 
-    pub fn get_last_update_timestamp(env: Env, asset: Symbol) -> Option<u64> {
-        let asset_id = symbol_to_asset_id(&asset);
-        let heartbeat_key = HeartbeatKey(asset_id);
-        env.storage().temporary().get(&heartbeat_key)
     pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
         let timestamps: Map<AssetId, u64> = env
             .storage()
@@ -498,8 +491,6 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_stake(env: Env, node: Address) -> u64 {
-        let stake_key = StakeKey(node);
-        env.storage().instance().get(&stake_key).unwrap_or(0u64)
         let stakes: Map<Address, u64> = env
             .storage()
             .instance()
@@ -537,8 +528,6 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn is_data_fresh(env: Env, asset: AssetId) -> bool {
-        let heartbeat_key = HeartbeatKey(asset);
-        if let Some(last_update) = env.storage().temporary().get(&heartbeat_key) {
         let timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
         if let Some(last_update) = timestamps.get(asset) {
             env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)

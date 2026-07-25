@@ -154,6 +154,37 @@ fn test_cancel_upgrade() {
 }
 
 #[test]
+fn test_execute_upgrade_post_health_check() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+    let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-health");
+
+    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+
+    // Fast forward time by 48 hours
+    advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
+
+    // Execute upgrade - should succeed with health check
+    let (exec_salt, exec_signature) = nonce_proof(&env, 1, b"execute-upgrade-health");
+    client.execute_upgrade(&admin, &1, &exec_salt, &exec_signature, &u64::MAX);
+
+    // Pending upgrade record should be cleared post-upgrade
+    assert!(client.get_pending_upgrade().is_none());
+
+    // Verify underlying persistent state storage remains intact post-upgrade
+    let data = client.get_data();
+    assert_eq!(data.admin, admin);
+}
+
+#[test]
 fn test_timelock_countdown() {
     let env = Env::default();
     env.mock_all_auths();
