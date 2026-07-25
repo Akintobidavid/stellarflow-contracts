@@ -57,6 +57,7 @@ pub mod governance;
 pub mod math;
 pub mod slashing;
 pub mod staking_tiers;
+pub mod router;
 pub mod storage;
 pub mod temp_governance;
 pub mod validation;
@@ -149,6 +150,22 @@ pub enum ContractError {
 
 
     InvalidVarianceConfig = 33,
+
+    // ── Multi-hop router errors ──────────────────────────────────────────
+    /// Route contains no swap steps.
+    EmptyRoute = 37,
+    /// Route exceeds the maximum allowed hop count.
+    RouteTooLong = 38,
+    /// An internal error occurred during route execution.
+    RouteExecutionFailed = 39,
+    /// A swap step received a zero input amount.
+    ZeroSwapAmount = 40,
+    /// Consecutive hops have mismatched asset types (hop N asset_out != hop N+1 asset_in).
+    InconsistentRouteAssets = 41,
+    /// The target pool has no registered corridor fee entry.
+    PoolNotFound = 42,
+    /// A swap step's output fell below its minimum amount out (slippage).
+    SlippageExceeded = 43,
 
 }
 
