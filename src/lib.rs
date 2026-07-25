@@ -50,6 +50,7 @@ pub mod staking_tiers;
 pub mod storage;
 pub mod temp_governance;
 pub mod validation;
+pub mod upgrades;
 use crate::governance::{verify_staged_delay, StagedUpgrade};
 use crate::validation::{check_bond_capacity, validate_telemetry_submission};
 use crate::governance::{
@@ -139,7 +140,8 @@ pub enum ContractError {
 
 
     InvalidVarianceConfig = 33,
-
+    NoPreviousUpgrade = 37,
+    RollbackWindowExpired = 38,
 }
 
 // Contract state keys
@@ -416,17 +418,14 @@ impl TimeLockedUpgradeContract {
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
         consume_nonce(&env, &executor, nonce, salt, signature)?;
-        let pending: StagedUpgrade = env
-            .storage()
-            .instance(
-            )
-            .get(&PENDING_UPGRADE_KEY)
-            .ok_or(ContractError::NoPendingUpgrade)?;
-        if !verify_staged_delay(pending.staged_at, env.ledger().sequence()) {
         let pending: StagedUpgrade = env.storage().instance().get(&PENDING_UPGRADE_KEY).ok_or(ContractError::NoPendingUpgrade)?;
         if !verify_staged_delay(pending.staged_at, env.ledger().timestamp(), UPGRADE_DELAY_SECONDS) {
             return Err(ContractError::UpgradeTimelockNotSatisfied);
         }
+        
+        // Preserve current WASM hash prior to upgrade execution
+        crate::upgrades::rollback::preserve_current_wasm(&env, &pending.new_wasm_hash);
+
         env.deployer().update_current_contract_wasm(pending.new_wasm_hash);
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
         Self::_extend_instance_ttl(&env);
@@ -451,6 +450,25 @@ impl TimeLockedUpgradeContract {
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
         Self::_extend_instance_ttl(&env);
         Ok(())
+    }
+
+    pub fn set_current_wasm(env: Env, admin: Address, wasm_hash: BytesN<32>) -> Result<(), ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
+        admin.require_auth();
+        env.storage().instance().set(&crate::upgrades::rollback::CURRENT_WASM_KEY, &wasm_hash);
+        Ok(())
+    }
+
+    pub fn rollback_upgrade(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        salt: Bytes,
+        signature: BytesN<32>,
+        sig_expires_at: u64,
+    ) -> Result<(), ContractError> {
+        crate::upgrades::rollback::execute_rollback(env, admin, nonce, salt, signature, sig_expires_at)
     }
 
     pub fn set_value(env: Env, new_value: u64, caller: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {

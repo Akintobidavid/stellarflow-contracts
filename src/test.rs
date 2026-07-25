@@ -1337,3 +1337,85 @@ fn test_node_profile_ttl_extension() {
     assert_eq!(rate, 100);
 }
 
+#[test]
+fn test_rollback_upgrade_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let initial_wasm = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+    let new_wasm = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+
+    // Set initial WASM hash
+    client.set_current_wasm(&admin, &initial_wasm);
+
+    // Propose upgrade
+    let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-rb");
+    client.propose_upgrade(&new_wasm, &admin, &0, &salt, &signature, &u64::MAX);
+
+    // Advance time past timelock
+    advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
+
+    // Execute upgrade (admin nonce increments to 1)
+    let (exec_salt, exec_signature) = nonce_proof(&env, 1, b"execute-upgrade-rb");
+    client.execute_upgrade(&admin, &1, &exec_salt, &exec_signature, &u64::MAX);
+
+    // Verify rollback can be executed within 72 hours (e.g. 10 hours later, admin nonce increments to 2)
+    advance_ledger_timestamp(&env, 10 * 60 * 60);
+    let (rb_salt, rb_signature) = nonce_proof(&env, 2, b"rollback-upgrade-rb");
+    client.rollback_upgrade(&admin, &2, &rb_salt, &rb_signature, &u64::MAX);
+}
+
+#[test]
+fn test_rollback_upgrade_expired() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let initial_wasm = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+    let new_wasm = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+
+    client.set_current_wasm(&admin, &initial_wasm);
+
+    let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-rb-exp");
+    client.propose_upgrade(&new_wasm, &admin, &0, &salt, &signature, &u64::MAX);
+
+    advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
+
+    let (exec_salt, exec_signature) = nonce_proof(&env, 1, b"execute-upgrade-rb-exp");
+    client.execute_upgrade(&admin, &1, &exec_salt, &exec_signature, &u64::MAX);
+
+    // Advance time past 72-hour window (e.g. 73 hours)
+    advance_ledger_timestamp(&env, 73 * 60 * 60);
+    let (rb_salt, rb_signature) = nonce_proof(&env, 2, b"rollback-upgrade-rb-exp");
+    let result = client.try_rollback_upgrade(&admin, &2, &rb_salt, &rb_signature, &u64::MAX);
+    assert_eq!(result, Err(Ok(ContractError::RollbackWindowExpired)));
+}
+
+#[test]
+fn test_rollback_upgrade_no_previous() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let (rb_salt, rb_signature) = nonce_proof(&env, 0, b"rollback-upgrade-rb-none");
+    let result = client.try_rollback_upgrade(&admin, &0, &rb_salt, &rb_signature, &u64::MAX);
+    assert_eq!(result, Err(Ok(ContractError::NoPreviousUpgrade)));
+}
+
+
