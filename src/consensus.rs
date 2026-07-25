@@ -4,6 +4,35 @@ use crate::storage::SequenceKey;
 use crate::ContractError;
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 
+pub const MAX_VALIDATORS: usize = 16;
+
+/// Perform a binary search on a sorted stack-allocated array of validator IDs.
+/// Returns Ok(index) if found, Err(index) if not found (where index is the insertion point).
+pub fn binary_search_validator(validators: &[u32; MAX_VALIDATORS], id: u32, len: usize) -> Result<usize, usize> {
+    let mut low = 0;
+    let mut high = len;
+    
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if validators[mid] == id {
+            return Ok(mid);
+        } else if validators[mid] < id {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    Err(low)
+}
+
+/// Refactored consensus depth check using stack-allocated array.
+pub fn check_consensus_depth_stack(_env: &Env, _validators: &[u32; MAX_VALIDATORS], len: usize) -> Result<(), ContractError> {
+    if len < 3 {
+        return Err(ContractError::IncompleteQuorum);
+    }
+    Ok(())
+}
+
 /// Basis-point denominator used when converting a BPS fraction to a multiplier.
 pub const BPS_DENOMINATOR: u64 = 10_000;
 
@@ -298,6 +327,34 @@ mod tests {
             v.push_back(WeightedEntry { value, weight });
         }
         v
+    }
+
+    // --- binary_search_validator & check_consensus_depth_stack ---
+    
+    #[test]
+    fn test_binary_search_validator() {
+        let mut validators = [0u32; MAX_VALIDATORS];
+        validators[0] = 10;
+        validators[1] = 20;
+        validators[2] = 30;
+        let len = 3;
+        
+        assert_eq!(binary_search_validator(&validators, 20, len), Ok(1));
+        assert_eq!(binary_search_validator(&validators, 15, len), Err(1));
+    }
+
+    #[test]
+    fn test_check_consensus_depth_stack_success() {
+        let env = Env::default();
+        let validators = [0u32; MAX_VALIDATORS];
+        assert!(check_consensus_depth_stack(&env, &validators, 5).is_ok());
+    }
+
+    #[test]
+    fn test_check_consensus_depth_stack_failure() {
+        let env = Env::default();
+        let validators = [0u32; MAX_VALIDATORS];
+        assert_eq!(check_consensus_depth_stack(&env, &validators, 2), Err(ContractError::IncompleteQuorum));
     }
 
     // --- apply_weight ---
