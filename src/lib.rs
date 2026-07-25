@@ -412,6 +412,64 @@ impl TimeLockedUpgradeContract {
             .get(&crate::governance::GOVERNANCE_UPGRADE_KEY)
     }
 
+    /// Get the current multi-signature weight configuration for WASM upgrades
+    pub fn get_multisig_config(env: Env) -> governance::MultiSigConfig {
+        governance::get_multisig_config(&env)
+    }
+
+    /// Set the multi-signature weight configuration for WASM upgrades
+    /// Requires admin authorization
+    pub fn set_multisig_config(
+        env: Env,
+        admin: Address,
+        config: governance::MultiSigConfig,
+    ) -> Result<(), ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        admin.require_auth();
+        governance::set_multisig_config(&env, &config);
+        env.events().publish(
+            (symbol_short!("MULTISIG_CFG"),),
+            (admin, config.required_weight, config.max_signer_weight),
+        );
+        Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Get the weight for a specific signer in multi-sig governance
+    pub fn get_signer_weight(env: Env, signer: Address) -> u32 {
+        governance::get_signer_weight(&env, &signer)
+    }
+
+    /// Register or update a signer's weight in multi-sig governance
+    /// Requires admin authorization
+    pub fn set_signer_weight(
+        env: Env,
+        admin: Address,
+        signer: Address,
+        weight: u32,
+    ) -> Result<(), ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        admin.require_auth();
+        
+        let multisig_config = governance::get_multisig_config(&env);
+        if weight > multisig_config.max_signer_weight && weight > 0 {
+            return Err(ContractError::InvalidStakeAmount);
+        }
+        
+        governance::set_signer_weight(&env, &signer, weight);
+        env.events().publish(
+            (symbol_short!("SIGNER_WT"),),
+            (admin, signer, weight),
+        );
+        Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
     // --- Core Logic Boilerplate ---
 
     fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
@@ -433,21 +491,34 @@ impl TimeLockedUpgradeContract {
         proposer.require_auth();
         consume_nonce(&env, &proposer, nonce, salt, salt_signature)?;
         verify_upgrade_quorum(&env, &signers)?;
+        let staged_at = env.ledger().timestamp();
+        let collected_weight = crate::governance::calculate_collected_weight(&env, &signers, &data)?;
+        let multisig_config = crate::governance::get_multisig_config(&env);
+    
         let proposal = GovernanceUpgradeProposal {
             new_wasm_hash: new_wasm_hash.clone(),
             proposer: proposer.clone(),
-            staged_at: env.ledger().timestamp(),
+            staged_at,
             signers: signers.clone(),
         };
         env.storage().instance().set(&crate::governance::GOVERNANCE_UPGRADE_KEY, &proposal);
+    
+        // Emit enhanced GovernanceUpgradeProposed event with weight information
         env.events().publish(
-            (symbol_short!("GV_UPG_PROPOSED"),),
-            (new_wasm_hash, proposer, signers, env.ledger().timestamp()),
+            (symbol_short!("GV_UPG_PRO"),),
+            crate::governance::GovernanceUpgradeProposedEvent {
+                new_wasm_hash: new_wasm_hash.clone(),
+                proposer: proposer.clone(),
+                signers: signers.clone(),
+                staged_at,
+                required_weight: multisig_config.required_weight,
+                collected_weight,
+            },
         );
         let staged = StagedUpgrade {
             new_wasm_hash,
             proposer,
-            staged_at: env.ledger().timestamp(),
+            staged_at,
         };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
         Ok(())
