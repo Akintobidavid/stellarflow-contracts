@@ -57,6 +57,7 @@ pub mod governance;
 pub mod math;
 pub mod slashing;
 pub mod staking_tiers;
+pub mod amm;
 pub mod router;
 pub mod storage;
 pub mod temp_governance;
@@ -166,6 +167,20 @@ pub enum ContractError {
     PoolNotFound = 42,
     /// A swap step's output fell below its minimum amount out (slippage).
     SlippageExceeded = 43,
+
+    // ── Concentrated liquidity / tick index errors ─────────────────────
+    /// Tick spacing is zero or negative.
+    InvalidTickSpacing = 44,
+    /// A tick index already exists for this pool.
+    TickIndexAlreadyExists = 45,
+    /// No tick index has been initialized for this pool.
+    TickIndexNotFound = 46,
+    /// A tick index is not aligned to the pool's tick spacing.
+    TickNotAligned = 47,
+    /// A tick index is outside the allowed range.
+    TickOutOfBounds = 48,
+    /// The pool has too many initialized ticks.
+    TooManyTicks = 49,
 
 }
 
