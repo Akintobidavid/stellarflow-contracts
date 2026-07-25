@@ -89,6 +89,8 @@ pub enum ContractError {
     NotRegistered = 9,
     InvalidStakeAmount = 10,
     Overflow = 11,
+    /// Arithmetic overflow or underflow in checked math operations.
+    MathOverflow = 37,
     Unauthorized = 12,
     TargetNotAdmin = 13,
     ProposalAlreadyActive = 14,
