@@ -52,6 +52,7 @@ pub mod consensus;
 pub mod fees;
 pub mod governance;
 pub mod math;
+pub mod recovery;
 pub mod slashing;
 pub mod staking_tiers;
 pub mod storage;
@@ -174,6 +175,8 @@ const RELAYER_TTL_THRESHOLD: u32 = 5_000;
 const INSTANCE_TTL_EXTEND: u32 = 100_000;
 const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
+const RECOVERY_KEY: Symbol = symbol_short!("RKEY");
+const LAST_ADMIN_ACTIVITY: Symbol = symbol_short!("LASTACT");
 
 #[contracttype]
 #[derive(Clone)]
@@ -322,6 +325,7 @@ impl TimeLockedUpgradeContract {
             env.storage().instance().set(&SIGNERS_KEY, &(count - 1));
         }
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
@@ -507,6 +511,7 @@ impl TimeLockedUpgradeContract {
         data.value = new_value;
         env.storage().instance().set(&DATA_KEY, &data);
         Self::_record_heartbeat(&env, 1u32);
+        crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
@@ -536,6 +541,7 @@ impl TimeLockedUpgradeContract {
         admin.require_auth();
         env.storage().instance().set(&HB_INTERVAL_KEY, &interval);
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
@@ -559,6 +565,7 @@ impl TimeLockedUpgradeContract {
         check_liquidity_depth(&env, asset)?;
         Self::_record_heartbeat(&env, asset);
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
@@ -592,6 +599,7 @@ impl TimeLockedUpgradeContract {
             .persistent()
             .set(&NODE_PROFILES_KEY, &profiles);
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
@@ -611,6 +619,7 @@ impl TimeLockedUpgradeContract {
         let data = Self::_load_data(&env)?;
         let pool = fees::add_corridor_fees(env.clone(), data.admin, asset, collected, variable_fee)?;
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(pool)
     }
 
@@ -628,6 +637,7 @@ impl TimeLockedUpgradeContract {
         let profile =
             fees::set_corridor_weight(env.clone(), admin, asset, base_weight, dynamic_weight)?;
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(profile)
     }
 
@@ -673,6 +683,7 @@ impl TimeLockedUpgradeContract {
             .instance()
             .set(&StakingStorageKey::TierConfig, &config);
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
@@ -713,6 +724,7 @@ impl TimeLockedUpgradeContract {
             .set(&StakingStorageKey::AssetMetrics(asset), &metrics);
 
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(metrics)
     }
 
@@ -881,6 +893,7 @@ impl TimeLockedUpgradeContract {
             env.storage().instance().set(&SIGNERS_KEY, &(count + 1));
         }
         Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
@@ -980,6 +993,42 @@ impl TimeLockedUpgradeContract {
         admin::has_active_emergency_revocation(&env)
     }
 
+    // ── Dead-Man's Switch Recovery (Issue #617) ──────────────────────────
+
+    /// Configure or update the secondary recovery key.
+    ///
+    /// Only the current administrator may call this function. The recovery
+    /// key is stored in instance storage and persists across contract upgrades.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::NotAdmin`] if `caller` is not the current admin.
+    /// - [`ContractError::NotInitialized`] if the contract has not been initialized.
+    pub fn set_recovery_key(env: Env, caller: Address, recovery_key: Address) -> Result<(), ContractError> {
+        crate::recovery::set_recovery_key(&env, &caller, &recovery_key)
+    }
+
+    /// Returns the configured recovery key address, if one has been set.
+    pub fn get_recovery_key(env: Env) -> Option<Address> {
+        crate::recovery::get_recovery_key(&env)
+    }
+
+    /// Attempt to reclaim administrative ownership using the secondary recovery key.
+    ///
+    /// Succeeds only when the administrator has been inactive for at least
+    /// 180 days and the caller is the configured recovery key.
+    /// On success, admin ownership is transferred and the inactivity timer is reset.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::RecoveryKeyNotConfigured`] if no recovery key has been set.
+    /// - [`ContractError::NotRecoveryKey`] if the caller is not the recovery key.
+    /// - [`ContractError::RecoveryNotAvailableYet`] if the inactivity threshold has not been reached.
+    /// - [`ContractError::NotInitialized`] if the contract has not been initialized.
+    pub fn recover_admin(env: Env, recovery_key: Address) -> Result<(), ContractError> {
+        crate::recovery::recover_admin(&env, &recovery_key)
+    }
+
     // ── Multi-Tier Escrow Penalties (Issue #525) ───────────────────────────────
 
     /// Record a validator ingestion dropout for an asset feed within the rolling
@@ -996,7 +1045,9 @@ impl TimeLockedUpgradeContract {
             return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
-        record_tracking_fault(&env, &validator, &asset)
+        let result = record_tracking_fault(&env, &validator, &asset)?;
+        crate::recovery::update_admin_activity(env);
+        Ok(result)
     }
 
     /// Return the number of ingestion faults recorded within the rolling window.
@@ -1037,7 +1088,7 @@ impl TimeLockedUpgradeContract {
         admin.require_auth();
 
         let fault_count = record_tracking_fault(&env, &validator, &asset)?;
-        apply_escrow_penalty(
+        let result = apply_escrow_penalty(
             &env,
             &validator,
             &asset,

@@ -522,6 +522,7 @@ pub fn execute_admin_change_by_timelock(
     contract_data.admin = proposal.new_admin;
     env.storage().instance().set(&DATA_KEY, &contract_data);
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
@@ -549,6 +550,7 @@ pub fn cancel_admin_change(
     canceller.require_auth();
 
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
