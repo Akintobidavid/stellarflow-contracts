@@ -479,6 +479,25 @@ impl TimeLockedUpgradeContract {
         Ok(())
     }
 
+    pub fn set_current_wasm(env: Env, admin: Address, wasm_hash: BytesN<32>) -> Result<(), ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
+        admin.require_auth();
+        env.storage().instance().set(&crate::upgrades::rollback::CURRENT_WASM_KEY, &wasm_hash);
+        Ok(())
+    }
+
+    pub fn rollback_upgrade(
+        env: Env,
+        admin: Address,
+        nonce: u64,
+        salt: Bytes,
+        signature: BytesN<32>,
+        sig_expires_at: u64,
+    ) -> Result<(), ContractError> {
+        crate::upgrades::rollback::execute_rollback(env, admin, nonce, salt, signature, sig_expires_at)
+    }
+
     pub fn set_value(env: Env, new_value: u64, caller: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         let mut data = Self::_load_data(&env)?;
