@@ -1,14 +1,11 @@
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, TryFromVal, Val};
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};
 use crate::storage::{SignerKey, RevokedSignerKey};
-use crate::{ContractData, ContractError, DATA_KEY, REVOKED_SIGNER_KEY, SIGNERS_KEY};
 use crate::temp_governance::{
     store_temp_proposal, get_temp_proposal, has_temp_proposal, remove_temp_proposal,
     extend_temp_proposal_ttl, EMERGENCY_REVOCATION_TEMP_KEY,
     DEFAULT_PROPOSAL_TTL, EXTENDED_PROPOSAL_TTL
 };
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, TryFromVal, Val};
-use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
 
 fn get_signers(env: &Env) -> Map<Address, ()> {
     env.storage()
@@ -182,11 +179,6 @@ pub fn propose_ownership_transfer(
     }
     current_admin.require_auth();
 
-    // Only the admin or a registered signer may open a proposal.
-    let is_signer = _is_signer(env, &proposer);
-    let is_signer = get_signers(env).contains_key(proposer.clone());
-    if data.admin != proposer && !is_signer {
-        return Err(ContractError::Unauthorized);
     if env.storage().instance().has(&PENDING_OWNER_KEY) {
         return Err(ContractError::TransferAlreadyPending);
     }
@@ -518,6 +510,8 @@ fn _is_signer(env: &Env, addr: &Address) -> bool {
 fn _revocation_threshold(env: &Env) -> u32 {
     let signer_count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
     if signer_count == 0 { 1 } else { signer_count / 2 + 1 }
+}
+
 // ─── Issue #410: Admin Storage Isolation via Contextual Instance Storage ──
 //
 // Issue #410 is a state-isolation hardening request: admin configuration

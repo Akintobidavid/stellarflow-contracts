@@ -101,11 +101,6 @@ pub fn check_subscription(env: &Env, consumer_id: Address) -> bool {
     }
 }
 
-/// Pre-flight rent check for storage entries
-pub fn preflight_rent_check(env: &Env) {
-    // This hook can be extended to check TTL of critical storage entries
-    // before executing operations that depend on them.
-    // Currently a no-op placeholder for future rent management.
 pub fn extend_asset_rent(env: &Env, asset: Symbol) -> bool {
     let key = DataKey::AssetPrice(asset);
     if env.storage().persistent().has(&key) {
@@ -116,7 +111,4 @@ pub fn extend_asset_rent(env: &Env, asset: Symbol) -> bool {
     }
 }
 
-pub fn preflight_rent_check(env: &Env) {
-    env.storage().instance().extend_ttl(0, ASSET_TTL_THRESHOLD);
-}
 

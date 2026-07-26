@@ -1,8 +1,6 @@
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 use crate::ContractError;
 use crate::storage::SequenceKey;
-use crate::ContractError;
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 
 /// Basis-point denominator used when converting a BPS fraction to a multiplier.
 pub const BPS_DENOMINATOR: u64 = 10_000;
@@ -224,10 +222,6 @@ pub fn verify_epoch_window(
 /// Validate and register the sequence of the latest asset update.
 /// Rejects incoming price updates instantly if the incoming tracking sequence
 /// is less than or equal to the active stored checkpoint value.
-pub fn verify_and_update_sequence(env: &Env, asset: Symbol, incoming_sequence: u32) -> Result<(), ContractError> {
-    let seq_key = SequenceKey(asset.clone());
-    
-    if let Some(active_sequence) = env.storage().instance().get(&seq_key) {
 pub fn verify_and_update_sequence(
     env: &Env,
     asset: Symbol,

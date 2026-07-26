@@ -47,7 +47,6 @@ pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
 pub mod admin;
-pub mod admin;
 pub mod auth;
 pub mod config;
 pub use config::{get_price_variance_config, set_price_variance_config, PriceVarianceConfig};
@@ -360,13 +359,6 @@ impl TimeLockedUpgradeContract {
         open_ballot(&env, REVOCATION_KEY, target, replacement, proposer)
     }
 
-        for i in 0..proposal.votes.len() {
-            if proposal.votes.get(i).unwrap() == voter {
-                return Err(ContractError::AlreadyVoted);
-            }
-        }
-
-        proposal.votes.push_back(voter);
     pub fn vote_revocation(env: Env, voter: Address, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         voter.require_auth();
@@ -480,10 +472,6 @@ impl TimeLockedUpgradeContract {
         get_nonce(&env, &coordinator)
     }
 
-    pub fn get_last_update_timestamp(env: Env, asset: Symbol) -> Option<u64> {
-        let asset_id = symbol_to_asset_id(&asset);
-        let heartbeat_key = HeartbeatKey(asset_id);
-        env.storage().temporary().get(&heartbeat_key)
     pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
         let timestamps: Map<AssetId, u64> = env
             .storage()
@@ -508,8 +496,6 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_stake(env: Env, node: Address) -> u64 {
-        let stake_key = StakeKey(node);
-        env.storage().instance().get(&stake_key).unwrap_or(0u64)
         let stakes: Map<Address, u64> = env
             .storage()
             .instance()
@@ -547,8 +533,6 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn is_data_fresh(env: Env, asset: AssetId) -> bool {
-        let heartbeat_key = HeartbeatKey(asset);
-        if let Some(last_update) = env.storage().temporary().get(&heartbeat_key) {
         let timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
         if let Some(last_update) = timestamps.get(asset) {
             env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)
@@ -586,12 +570,6 @@ impl TimeLockedUpgradeContract {
         Ok(Self::_scan_profile_for_rate(profile).ok_or(ContractError::NotRegistered)?)
     }
 
-    pub fn add_corridor_fees(env: Env, asset: Symbol, collected: u64, variable_fee: u64) -> Result<CorridorFeePool, ContractError> {
-        let fee_key = CorridorFeeKey(asset.clone());
-        let mut pool: CorridorFeePool = env.storage().persistent().get(&fee_key).unwrap_or(CorridorFeePool { asset: asset.clone(), collected: 0, variable_pool: 0 });
-        pool.collected = pool.collected.checked_add(collected).ok_or(ContractError::Overflow)?;
-        pool.variable_pool = pool.variable_pool.checked_add(variable_fee).ok_or(ContractError::Overflow)?;
-        env.storage().persistent().set(&fee_key, &pool);
     pub fn add_corridor_fees(
         env: Env,
         admin: Address,
@@ -687,7 +665,6 @@ impl TimeLockedUpgradeContract {
         env.storage()
             .persistent()
             .set(&metrics_key, &metrics);
-            .set(&StakingStorageKey::AssetMetrics(asset), &metrics);
 
         Self::_extend_instance_ttl(&env);
         Ok(metrics)
@@ -700,19 +677,6 @@ impl TimeLockedUpgradeContract {
     pub fn get_staking_tier(env: Env, asset: AssetId) -> StakingTier {
         assign_tier(&Self::_resolve_feed_metrics(&env, &asset))
     }
-
-    fn _resolve_feed_metrics(env: &Env, asset: &Symbol) -> AssetFeedMetrics {
-        let pool = Self::get_corridor_fee_pool(env.clone(), asset.clone());
-        let metrics_key = AssetMetricsKey(asset.clone());
-        let stored: AssetFeedMetrics = env
-            .storage()
-            .persistent()
-            .get(&metrics_key)
-            .unwrap_or(AssetFeedMetrics {
-                volume_score: 0,
-                volatility_bps: 0,
-            });
-
 
     /// Return the minimum stake a validator must post for a currency feed.
     pub fn get_required_stake(env: Env, asset: AssetId) -> u64 {
@@ -821,8 +785,6 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Return the collateral posted by a node for a specific currency feed.
-    pub fn get_feed_stake(env: Env, node: Address, asset: Symbol) -> u64 {
-        let feed_key = FeedStakeKey(node, asset);
     pub fn get_feed_stake(env: Env, node: Address, asset: AssetId) -> u64 {
         storage::check_and_prune_feed_stake(&env, node.clone(), asset);
         let feed_key = StakingStorageKey::FeedStake(node, asset);
@@ -833,9 +795,6 @@ impl TimeLockedUpgradeContract {
             .unwrap_or(0)
     }
 
-    pub fn get_corridor_fee_pool(env: Env, asset: Symbol) -> CorridorFeePool {
-        let fee_key = CorridorFeeKey(asset.clone());
-        env.storage().persistent().get(&fee_key).unwrap_or(CorridorFeePool { asset, collected: 0, variable_pool: 0 })
     pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
         env.storage()
             .persistent()
@@ -933,6 +892,8 @@ impl TimeLockedUpgradeContract {
         env: Env,
     ) -> Option<admin::EmergencyRevocationProposal> {
         admin::get_emergency_revocation_proposal(&env)
+    }
+
     /// This can be called by any party since the primary security model relies on
     /// the voting threshold for proposal execution, not on proposal creation.
     pub fn purge_expired_revocation_prop(env: Env) -> Result<(), ContractError> {
@@ -1102,13 +1063,7 @@ impl TimeLockedUpgradeContract {
         if signer_count == 0 { 1 } else { signer_count / 2 + 1 }
     }
 
-    fn _resolve_feed_metrics(env: &Env, asset: &Symbol) -> AssetFeedMetrics {
-        let pool = Self::get_corridor_fee_pool(env.clone(), asset.clone());
-        let metrics_key = AssetMetricsKey(asset.clone());
-        let stored: AssetFeedMetrics = env
-            .storage()
-            .persistent()
-            .get(&metrics_key)
+
         let n = Self::_get_signers(env).len();
         if n == 0 {
             1
@@ -1134,13 +1089,6 @@ impl TimeLockedUpgradeContract {
         }
     }
 
-        AssetFeedMetrics {
-            volume_score: effective_volume_score(stored.volume_score, pool.collected),
-            volatility_bps: stored.volatility_bps,
-        }
-    }
-
-    pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
     pub fn update_validator_profile(
         env: Env,
         node: Address,
@@ -1236,6 +1184,8 @@ impl TimeLockedUpgradeContract {
         Ok(())
     }
 }
+
+} // end impl TimeLockedUpgradeContract
 
 #[cfg(test)]
 mod query_guardrail_tests {
