@@ -56,6 +56,7 @@ pub mod slashing;
 pub mod staking_tiers;
 pub mod storage;
 pub mod temp_governance;
+pub mod upgrades;
 pub mod validation;
 
 use crate::governance::{
@@ -235,6 +236,7 @@ pub struct TimeLockedUpgradeContract;
 #[contractimpl]
 impl TimeLockedUpgradeContract {
     pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
+        ensure_schema_version(&env)?;
         if env.storage().instance().has(&DATA_KEY) {
             return Err(ContractError::AlreadyInitialized);
         }
@@ -374,6 +376,7 @@ impl TimeLockedUpgradeContract {
     // --- Core Logic Boilerplate ---
 
     fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
+        let _ = ensure_schema_version(env);
         env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
     }
 
@@ -453,6 +456,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
+        let _ = ensure_schema_version(&env);
         let timestamps: Map<AssetId, u64> = env
             .storage()
             .temporary()
@@ -462,6 +466,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_heartbeat_interval(env: Env) -> u64 {
+        let _ = ensure_schema_version(&env);
         Self::_get_interval(&env)
     }
 
@@ -481,6 +486,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_total_staked(env: Env) -> u64 {
+        let _ = ensure_schema_version(&env);
         env.storage()
             .instance()
             .get(&TOTAL_STAKED_KEY)
