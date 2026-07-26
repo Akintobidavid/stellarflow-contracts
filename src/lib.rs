@@ -604,12 +604,12 @@ impl TimeLockedUpgradeContract {
 
     pub fn add_corridor_fees(
         env: Env,
-        admin: Address,
         asset: AssetId,
         collected: u64,
         variable_fee: u64,
     ) -> Result<fees::CorridorFeePool, ContractError> {
-        let pool = fees::add_corridor_fees(env.clone(), admin, asset, collected, variable_fee)?;
+        let data = Self::_load_data(&env)?;
+        let pool = fees::add_corridor_fees(env.clone(), data.admin, asset, collected, variable_fee)?;
         Self::_extend_instance_ttl(&env);
         Ok(pool)
     }
@@ -831,7 +831,6 @@ impl TimeLockedUpgradeContract {
     /// `storage::RENT_THRESHOLD` since its last activity has its stake entry
     /// removed and its totals reconciled before this read returns.
     pub fn get_feed_stake(env: Env, node: Address, asset: AssetId) -> u64 {
-        storage::check_and_prune_feed_stake(&env, node.clone(), asset);
         let feed_key = StakingStorageKey::FeedStake(node, asset);
         let stake_val: Option<storage::FeedStakeValue> = env
             .storage()

@@ -95,6 +95,13 @@ pub enum CorridorFeeKey {
     FeeByAsset(Symbol),
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeedStakeValue {
+    pub amount: u64,
+    pub last_active: u64,
+}
+
 pub const RENT_THRESHOLD: u32 = 259_200;
 pub const RENT_EXTEND_TO: u32 = 518_400;
 
