@@ -44,6 +44,7 @@ pub fn asset_id_to_symbol(asset_id: u32) -> Symbol {
 pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
+pub mod amm;
 pub mod admin;
 pub mod auth;
 pub mod config;
@@ -154,6 +155,8 @@ pub enum ContractError {
     AdminChangeTimelockNotSatisfied = 45,
     /// The validator has no locked bond available to deduct an escrow penalty from.
     InsufficientBondForPenalty = 46,
+    /// The final swap output is below the caller's minimum acceptable amount.
+    SlippageExceeded = 47,
 }
 
 // Contract state keys
