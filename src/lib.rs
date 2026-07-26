@@ -50,6 +50,7 @@ pub mod auth;
 pub mod config;
 pub use config::{get_price_variance_config, set_price_variance_config, PriceVarianceConfig};
 pub mod consensus;
+pub mod events;
 pub mod fees;
 pub mod governance;
 pub mod math;
@@ -60,6 +61,8 @@ pub mod storage;
 pub mod temp_governance;
 pub mod upgrades;
 pub mod validation;
+
+pub use events::swaps::{publish_swap_executed, SwapExecutedEvent};
 
 use crate::governance::{
     verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot, get_ballot,
