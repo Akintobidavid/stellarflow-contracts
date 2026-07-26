@@ -47,7 +47,7 @@ pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
 pub mod admin;
-pub mod admin;
+pub mod core;
 pub mod auth;
 pub mod config;
 pub use config::{get_price_variance_config, set_price_variance_config, PriceVarianceConfig};
@@ -319,7 +319,7 @@ impl TimeLockedUpgradeContract {
             let count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
             env.storage().instance().set(&SIGNERS_KEY, &(count - 1));
         }
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -439,7 +439,7 @@ impl TimeLockedUpgradeContract {
         }
         env.deployer().update_current_contract_wasm(pending.new_wasm_hash);
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -459,7 +459,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -503,7 +503,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         env.storage().instance().set(&HB_INTERVAL_KEY, &interval);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -542,7 +542,7 @@ impl TimeLockedUpgradeContract {
         updater.require_auth();
         check_liquidity_depth(&env, asset)?;
         Self::_record_heartbeat(&env, asset);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -575,7 +575,7 @@ impl TimeLockedUpgradeContract {
         env.storage()
             .persistent()
             .set(&NODE_PROFILES_KEY, &profiles);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -600,7 +600,7 @@ impl TimeLockedUpgradeContract {
         variable_fee: u64,
     ) -> Result<fees::CorridorFeePool, ContractError> {
         let pool = fees::add_corridor_fees(env.clone(), admin, asset, collected, variable_fee)?;
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(pool)
     }
 
@@ -617,7 +617,7 @@ impl TimeLockedUpgradeContract {
     ) -> Result<fees::CorridorWeightProfile, ContractError> {
         let profile =
             fees::set_corridor_weight(env.clone(), admin, asset, base_weight, dynamic_weight)?;
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(profile)
     }
 
@@ -647,7 +647,7 @@ impl TimeLockedUpgradeContract {
         env.storage()
             .instance()
             .set(&StakingStorageKey::TierConfig, &config);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -689,7 +689,7 @@ impl TimeLockedUpgradeContract {
             .set(&metrics_key, &metrics);
             .set(&StakingStorageKey::AssetMetrics(asset), &metrics);
 
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(metrics)
     }
 
@@ -874,7 +874,7 @@ impl TimeLockedUpgradeContract {
             let count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
             env.storage().instance().set(&SIGNERS_KEY, &(count + 1));
         }
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1083,12 +1083,6 @@ impl TimeLockedUpgradeContract {
         // This is a no-op placeholder for compatibility.
     }
 
-    fn _extend_instance_ttl(env: &Env) {
-        env.storage().instance().extend_ttl(
-            RELAYER_TTL_THRESHOLD,
-            RELAYER_TTL_THRESHOLD + INSTANCE_TTL_EXTEND,
-        );
-    }
 
     fn _is_signer(env: &Env, addr: &Address) -> bool {
         let signer_key = SignerKey(addr.clone());
