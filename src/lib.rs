@@ -59,6 +59,7 @@ pub mod storage;
 pub mod temp_governance;
 pub mod upgrades;
 pub mod validation;
+pub mod amm;
 
 use crate::governance::{
     verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot, get_ballot,
@@ -154,6 +155,8 @@ pub enum ContractError {
     AdminChangeTimelockNotSatisfied = 45,
     /// The validator has no locked bond available to deduct an escrow penalty from.
     InsufficientBondForPenalty = 46,
+    /// Invalid input provided to a mathematical operation (e.g. zero value).
+    InvalidInput = 47,
 }
 
 // Contract state keys
