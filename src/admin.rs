@@ -487,6 +487,7 @@ pub fn countersign_admin_change(
     contract_data.admin = proposal.new_admin;
     env.storage().instance().set(&DATA_KEY, &contract_data);
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
+    crate::core::instance::bump_instance_ttl(env);
     Ok(())
 }
 

@@ -430,7 +430,7 @@ impl TimeLockedUpgradeContract {
         // Run post-upgrade diagnostic health checks
         Self::_run_post_upgrade_health_check(&env, pre_upgrade_data)?;
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -485,7 +485,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
-        Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1153,12 +1153,6 @@ impl TimeLockedUpgradeContract {
         let _ = env;
     }
 
-    fn _extend_instance_ttl(env: &Env) {
-        env.storage().instance().extend_ttl(
-            RELAYER_TTL_THRESHOLD,
-            RELAYER_TTL_THRESHOLD + INSTANCE_TTL_EXTEND,
-        );
-    }
 
     fn _is_signer(env: &Env, addr: &Address) -> bool {
         let signer_key = SignerKey::SignerByAddress(addr.clone());
