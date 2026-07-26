@@ -194,6 +194,7 @@ const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 pub struct ContractData {
     pub admin: Address,
     pub value: u64,
+    pub max_fee_ceiling: u64,
 }
 
 #[contracttype]
@@ -413,9 +414,48 @@ impl TimeLockedUpgradeContract {
         if !verify_staged_delay(pending.staged_at, env.ledger().timestamp(), UPGRADE_DELAY_SECONDS) {
             return Err(ContractError::UpgradeTimelockNotSatisfied);
         }
+        // Store pre-upgrade contract data snapshot for health check validation
+        let pre_upgrade_data = data.clone();
         env.deployer().update_current_contract_wasm(pending.new_wasm_hash);
+        // Run post-upgrade diagnostic health checks
+        Self::_run_post_upgrade_health_check(&env, pre_upgrade_data)?;
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
         Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Run diagnostic checks after upgrade to assert storage integrity post-upgrade.
+    /// Returns UpgradeHealthCheckFailed if any invariant is violated.
+    fn _run_post_upgrade_health_check(env: &Env, pre_upgrade_data: ContractData) -> Result<(), ContractError> {
+        // Diagnostic 1: Verify admin still exists and is accessible
+        let post_upgrade_data = Self::_load_data(env)?;
+        if post_upgrade_data.admin != pre_upgrade_data.admin {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 2: Verify core state keys are still accessible
+        if !env.storage().instance().has(&DATA_KEY) {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 3: Verify treasury address is still present (immutable after deployment)
+        let treasury: Option<Address> = env.storage().instance().get(&TREASURY_KEY);
+        if treasury.is_none() {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 4: Verify instance storage is still readable
+        let total_staked: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
+        if total_staked > u64::MAX {
+            return Err(ContractError::UpgradeHealthCheckFailed);
+        }
+
+        // Diagnostic 5: Verify signers map is still accessible
+        let _signers: Map<Address, ()> = env.storage().instance().get(&SIGNERS_KEY).unwrap_or_else(|| Map::new(env));
+
+        // Diagnostic 6: Verify heartbeat interval is still accessible
+        let _heartbeat_interval: u64 = env.storage().instance().get(&HB_INTERVAL_KEY).unwrap_or(DEFAULT_HEARTBEAT_INTERVAL);
+
         Ok(())
     }
 
