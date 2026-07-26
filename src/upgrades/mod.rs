@@ -1,1 +1,1 @@
-pub mod rollback;
+pub mod migration;
