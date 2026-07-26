@@ -77,12 +77,11 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
         return false;
     }
 
-    env.storage()
+    let admins = env
+        .storage()
         .instance()
         .get::<DataKey, Vec<Address>>(&DataKey::Admin)
-    else {
-        return false;
-    };
+        .unwrap_or_else(|| Vec::new(env));
 
     // Stack-local fixed buffer — avoids any BTreeMap / HashMap heap allocation.
     const CAP: usize = 16;
@@ -101,6 +100,15 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
         }
     }
     false
+}
+
+pub fn _require_auth_for_args<T: soroban_sdk::IntoVal>(
+    env: &Env,
+    caller: &Address,
+    args: &[T],
+) {
+    caller.require_auth_for_args(args);
+    let _ = env;
 }
 
 pub fn _require_authorized(env: &Env, caller: &Address) {
@@ -295,7 +303,6 @@ pub fn _is_provider(env: &Env, addr: &Address) -> bool {
         return false;
     }
 
-    env.storage()
     // 1. Direct provider whitelist check
     if env
         .storage()
