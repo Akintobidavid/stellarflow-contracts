@@ -1,1 +1,1 @@
-pub mod invariant;
+pub mod slippage;
