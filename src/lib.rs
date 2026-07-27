@@ -62,6 +62,10 @@ pub mod temp_governance;
 pub mod upgrades;
 pub mod validation;
 
+pub use events::liquidity::{
+    publish_liquidity_added, publish_liquidity_removed, LiquidityAddedEvent,
+    LiquidityRemovedEvent,
+};
 pub use events::swaps::{publish_swap_executed, SwapExecutedEvent};
 
 use crate::governance::{
