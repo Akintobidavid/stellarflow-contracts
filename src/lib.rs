@@ -85,6 +85,7 @@ pub mod slashing;
 pub mod staging;
 pub mod staking_tiers;
 pub mod amm;
+pub mod events;
 pub mod router;
 pub mod settlement;
 pub mod storage;
@@ -1222,8 +1223,10 @@ impl TimeLockedUpgradeContract {
         Self::_record_heartbeat(&env, symbol_to_asset_id(&pool));
 
         // Emit event for monitoring
-        env.events().publish(
-            (soroban_sdk::symbol_short!("telem_ok"),),
+        let _ = emit_simple2(
+            &env,
+            EV_TELEMETRY_OK,
+            symbol_short!("telem"),
             (node, pool, payload_timestamp),
         );
 

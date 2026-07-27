@@ -21,6 +21,7 @@
 
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
 
+use crate::events::{emit_simple2, EV_ROUTE_OK};
 use crate::fees::{self, CorridorFeePool};
 use crate::{AssetId, ContractError};
 
@@ -225,8 +226,10 @@ pub fn execute_route(env: &Env, route: &Route) -> Result<RouteResult, ContractEr
     env.storage().temporary().remove(&ROUTE_EXEC_KEY);
 
     // Emit a settlement event for off-chain indexers.
-    env.events().publish(
-        (symbol_short!("route_ok"),),
+    let _ = emit_simple2(
+        &env,
+        EV_ROUTE_OK,
+        symbol_short!("route"),
         (sender.clone(), running_amount, route.steps.len()),
     );
 

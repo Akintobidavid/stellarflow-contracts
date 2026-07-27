@@ -24,6 +24,7 @@
 
 use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, Symbol};
 
+use crate::events::{emit_simple2, EV_HTLC_NEW, EV_HTLC_CLAIM, EV_HTLC_REFUND};
 use crate::{AssetId, ContractError};
 
 // ---------------------------------------------------------------------------
@@ -201,8 +202,10 @@ pub fn create_htlc(
         .set(&counter_key, &(count + 1));
 
     // Emit creation event.
-    env.events().publish(
-        (symbol_short!("htlc_new"),),
+    let _ = emit_simple2(
+        &env,
+        EV_HTLC_NEW,
+        symbol_short!("htlc"),
         (htlc_id, depositor, htlc.beneficiary.clone(), amount),
     );
 
@@ -285,8 +288,10 @@ pub fn claim(
     }
 
     // Emit claim event.
-    env.events().publish(
-        (symbol_short!("htlc_clm"),),
+    let _ = emit_simple2(
+        &env,
+        EV_HTLC_CLAIM,
+        symbol_short!("htlc"),
         (htlc_id, caller, htlc.amount),
     );
 
@@ -365,8 +370,10 @@ pub fn refund(
     }
 
     // Emit refund event.
-    env.events().publish(
-        (symbol_short!("htlc_ref"),),
+    let _ = emit_simple2(
+        &env,
+        EV_HTLC_REFUND,
+        symbol_short!("htlc"),
         (htlc_id, caller, htlc.amount),
     );
 
