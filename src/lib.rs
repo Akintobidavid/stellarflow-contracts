@@ -1121,8 +1121,6 @@ impl TimeLockedUpgradeContract {
         if profile.confidence == 0 { None } else { Some(profile.rate) }
     }
 
-    fn _maintain_relayer_profile_ttl(_env: &Env) {
-        // TTL managed per-entry via persistent storage; no-op placeholder.
     fn _maintain_relayer_profile_ttl(env: &Env) {
         // With individual tuple keys, TTL is managed per-entry.
         // This is a no-op placeholder for compatibility.
@@ -1141,9 +1139,6 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _resolve_feed_metrics(env: &Env, asset: AssetId) -> AssetFeedMetrics {
-        let stored: AssetFeedMetrics = env.storage().persistent()
-            .get(&StakingStorageKey::AssetMetrics(asset))
-            .unwrap_or(AssetFeedMetrics { volume_score: 10, volatility_bps: 100 });
         let stored: AssetFeedMetrics = env
             .storage()
             .persistent()
