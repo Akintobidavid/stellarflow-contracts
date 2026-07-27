@@ -88,6 +88,11 @@ pub mod storage;
 pub mod temp_governance;
 pub mod upgrades;
 pub mod validation;
+use crate::governance::{
+    verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot,
+    verify_upgrade_quorum, GovernanceUpgradeProposal,
+};
+use crate::validation::{check_bond_capacity, validate_telemetry_submission};
 
 use crate::governance::{
     cast_vote, close_ballot, open_ballot, verify_staged_delay, StagedUpgrade, VotingBallot,
@@ -517,6 +522,8 @@ impl TimeLockedUpgradeContract {
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        env.storage().instance().remove(&crate::governance::GOVERNANCE_UPGRADE_KEY);
+        Self::_extend_instance_ttl(&env);
         crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
