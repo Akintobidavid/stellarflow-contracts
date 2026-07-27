@@ -57,6 +57,7 @@ pub mod slashing;
 pub mod staking_tiers;
 pub mod storage;
 pub mod temp_governance;
+pub mod security;
 pub mod upgrades;
 pub mod validation;
 
@@ -154,6 +155,8 @@ pub enum ContractError {
     AdminChangeTimelockNotSatisfied = 45,
     /// The validator has no locked bond available to deduct an escrow penalty from.
     InsufficientBondForPenalty = 46,
+    /// The caller is not the designated emergency admin.
+    NotEmergencyAdmin = 47,
 }
 
 // Contract state keys
@@ -933,6 +936,42 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_paused(env: Env, caller: Address, paused: bool, nonce: u64) -> Result<(), ContractError> {
         crate::admin::set_paused(&env, caller, paused, nonce)
+    }
+
+    // --- Emergency Admin (Issue #598) ---
+
+    /// Designate an address as the EmergencyAdmin, capable of instantly pausing
+    /// the contract without multi-sig delay. Only the current admin may call this.
+    pub fn set_emergency_admin(env: Env, caller: Address, emergency_admin: Address) -> Result<(), ContractError> {
+        crate::security::pausable::set_emergency_admin(&env, &caller, &emergency_admin)
+    }
+
+    /// Return the currently configured EmergencyAdmin address, if any.
+    pub fn get_emergency_admin(env: Env) -> Option<Address> {
+        crate::security::pausable::get_emergency_admin(&env)
+    }
+
+    /// Instantly pause all contract operations.
+    ///
+    /// Only the designated `EmergencyAdmin` may call this. Authentication is a
+    /// single `require_auth` check — no multi-sig delay window applies.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotEmergencyAdmin`] if the caller is not the emergency admin.
+    pub fn emergency_pause(env: Env, caller: Address) -> Result<(), ContractError> {
+        crate::security::pausable::emergency_pause(&env, &caller)
+    }
+
+    /// Resume contract operations after an emergency pause.
+    ///
+    /// Requires full governance multi-sig quorum via `require_multisig` to
+    /// protect against a compromised EmergencyAdmin permanently locking the
+    /// contract. The `caller` must be one of the signers.
+    ///
+    /// # Errors
+    /// - [`ContractError::ThresholdNotReached`] if insufficient signers.
+    pub fn emergency_unpause(env: Env, caller: Address, signers: Vec<Address>) -> Result<(), ContractError> {
+        crate::security::pausable::emergency_unpause(&env, &caller, &signers)
     }
 
     // --- Per-action admin nonce query (Issue #529) ---
