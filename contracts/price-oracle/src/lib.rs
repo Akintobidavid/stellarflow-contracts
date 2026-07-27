@@ -1959,6 +1959,7 @@ impl PriceOracle {
             let storage = env.storage().persistent();
             let key = DataKey::VerifiedPrice(asset.clone());
             let existing: Option<PriceData> = storage.get(&key);
+            storage.extend_ttl(&key, 10_000u32, 10_000u32);
             let old_price_opt = existing.as_ref().map(|p| p.price);
             let is_new_asset = existing.is_none();
 
@@ -2420,6 +2421,7 @@ impl PriceOracle {
         );
 
         storage.set(&key, &price_data);
+        storage.extend_ttl(&key, 10_000u32, 10_000u32);
         update_twap(&env, asset.clone(), median_price, env.ledger().timestamp());
 
         event_topics::publish_price_update(
