@@ -84,6 +84,7 @@ pub mod recovery;
 pub mod slashing;
 pub mod staging;
 pub mod staking_tiers;
+pub mod amm;
 pub mod router;
 pub mod storage;
 pub mod temp_governance;
