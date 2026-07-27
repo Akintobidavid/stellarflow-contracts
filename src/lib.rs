@@ -86,6 +86,7 @@ pub mod staging;
 pub mod staking_tiers;
 pub mod amm;
 pub mod router;
+pub mod settlement;
 pub mod storage;
 pub mod temp_governance;
 pub mod upgrades;
