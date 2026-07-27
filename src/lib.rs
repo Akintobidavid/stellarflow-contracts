@@ -1036,21 +1036,22 @@ impl TimeLockedUpgradeContract {
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         let fault_count = record_tracking_fault(&env, &validator, &asset)?;
-        apply_escrow_penalty(
-            &env, &validator, &asset, base_bond, fault_count,
-            &STAKE_REGISTRY_KEY, &TOTAL_STAKED_KEY,
-        let result = apply_escrow_penalty(
-            &env,
-            &validator,
-            &asset,
-            base_bond,
-            fault_count,
-            &STAKE_REGISTRY_KEY,
-            &TOTAL_STAKED_KEY,
-            &StakingStorageKey::FeedStake(validator.clone(), symbol_to_asset_id(&asset)),
-        )
-    }
 
+        let result = apply_escrow_penalty(
+    &env,
+    &validator,
+    &asset,
+    base_bond,
+    fault_count,
+    &STAKE_REGISTRY_KEY,
+    &TOTAL_STAKED_KEY,
+    &StakingStorageKey::FeedStake(
+        validator.clone(),
+        symbol_to_asset_id(&asset),
+    ),
+)?;
+        Ok(result)
+       
     pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
         admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
