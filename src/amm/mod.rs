@@ -1,1 +1,1 @@
-pub mod ticks;
+pub mod slippage;
