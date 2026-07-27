@@ -88,7 +88,7 @@ pub struct WeightedEntry {
 ///
 /// This is the inner kernel called for each entry in `compute_weighted_sum`.
 pub fn apply_weight(value: u64, weight: u64) -> Result<u64, ContractError> {
-    value.checked_mul(weight).ok_or(ContractError::Overflow)
+    value.checked_mul(weight).ok_or(ContractError::MathOverflow)
 }
 
 /// Accumulate the sum of `entry.value * entry.weight` across every entry in the
@@ -101,11 +101,11 @@ pub fn compact_duplicate_price_rows(
     let mut compacted: Vec<WeightedEntry> = Vec::new(env);
     // Use a simple linear search for duplicates instead of Map for gas optimization
     // For small datasets, this is more efficient than Map overhead
-    
+
     for i in 0..entries.len() {
         let entry = entries.get(i).unwrap();
         let mut found = false;
-        
+
         for j in 0..compacted.len() {
             let existing = compacted.get(j).unwrap();
             if existing.value == entry.value {
@@ -113,7 +113,7 @@ pub fn compact_duplicate_price_rows(
                 let merged_weight = existing
                     .weight
                     .checked_add(entry.weight)
-                    .ok_or(ContractError::Overflow)?;
+                    .ok_or(ContractError::MathOverflow)?;
 
                 compacted.set(
                     idx,
@@ -126,7 +126,7 @@ pub fn compact_duplicate_price_rows(
                 break;
             }
         }
-        
+
         if !found {
             compacted.push_back(entry.clone());
         }
@@ -150,11 +150,11 @@ pub fn compute_weighted_sum(
 
         weighted_sum = weighted_sum
             .checked_add(weighted_value)
-            .ok_or(ContractError::Overflow)?;
+            .ok_or(ContractError::MathOverflow)?;
 
         total_weight = total_weight
             .checked_add(entry.weight)
-            .ok_or(ContractError::Overflow)?;
+            .ok_or(ContractError::MathOverflow)?;
     }
 
     Ok((weighted_sum, total_weight))
@@ -186,7 +186,7 @@ pub fn compute_weighted_average(
 pub fn compute_quorum_threshold(total_weight: u64, quorum_bps: u64) -> Result<u64, ContractError> {
     let numerator = total_weight
         .checked_mul(quorum_bps)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
 
     Ok(numerator / BPS_DENOMINATOR)
 }
@@ -199,7 +199,7 @@ pub fn compute_quorum_threshold(total_weight: u64, quorum_bps: u64) -> Result<u6
 pub fn normalize_weight_score(raw_score: u64, precision: u64) -> Result<u64, ContractError> {
     raw_score
         .checked_mul(precision)
-        .ok_or(ContractError::Overflow)
+        .ok_or(ContractError::MathOverflow)
 }
 
 /// Compute how much of the accumulated weighted score a single entry
@@ -214,7 +214,7 @@ pub fn entry_weight_share_bps(entry_weight: u64, total_weight: u64) -> Result<u6
 
     let numerator = entry_weight
         .checked_mul(BPS_DENOMINATOR)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
 
     Ok(numerator / total_weight)
 }
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn test_apply_weight_overflow() {
         let result = apply_weight(u64::MAX, 2);
-        assert_eq!(result, Err(ContractError::Overflow));
+        assert_eq!(result, Err(ContractError::MathOverflow));
     }
 
     // --- compute_weighted_sum ---
@@ -487,7 +487,7 @@ mod tests {
         let env = Env::default();
         let entries = make_entries(&env, &[(u64::MAX, 2)]);
         let result = compute_weighted_sum(&env, &entries);
-        assert_eq!(result, Err(ContractError::Overflow));
+        assert_eq!(result, Err(ContractError::MathOverflow));
     }
 
     #[test]
@@ -499,7 +499,7 @@ mod tests {
         // half*2 = u64::MAX-1, second half*2 would overflow the running sum
         // u64::MAX - 1 + (u64::MAX - 1) overflows
         let result = compute_weighted_sum(&env, &entries);
-        assert_eq!(result, Err(ContractError::Overflow));
+        assert_eq!(result, Err(ContractError::MathOverflow));
     }
 
     // --- compute_weighted_average ---
@@ -536,7 +536,7 @@ mod tests {
     fn test_quorum_threshold_overflow() {
         // u64::MAX * 2 overflows even before dividing
         let result = compute_quorum_threshold(u64::MAX, 2);
-        assert_eq!(result, Err(ContractError::Overflow));
+        assert_eq!(result, Err(ContractError::MathOverflow));
     }
 
     #[test]
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn test_normalize_score_overflow() {
         let result = normalize_weight_score(u64::MAX, 2);
-        assert_eq!(result, Err(ContractError::Overflow));
+        assert_eq!(result, Err(ContractError::MathOverflow));
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn test_share_bps_overflow_on_numerator() {
         let result = entry_weight_share_bps(u64::MAX, 1);
-        assert_eq!(result, Err(ContractError::Overflow));
+        assert_eq!(result, Err(ContractError::MathOverflow));
     }
 
     // --- verify_and_update_sequence (refactored: state-isolated composite keys) ---
@@ -766,7 +766,7 @@ mod tests {
             min_persistent_entry_ttl: 0,
             max_entry_ttl: 0,
         });
-        
+
         assert_eq!(verify_epoch_window(&env, 90, 110), Ok(()));
         assert_eq!(verify_epoch_window(&env, 100, 100), Ok(()));
     }
@@ -784,7 +784,7 @@ mod tests {
             min_persistent_entry_ttl: 0,
             max_entry_ttl: 0,
         });
-        
+
         assert_eq!(verify_epoch_window(&env, 101, 120), Err(ContractError::EpochClosed));
         assert_eq!(verify_epoch_window(&env, 80, 99), Err(ContractError::EpochClosed));
     }
