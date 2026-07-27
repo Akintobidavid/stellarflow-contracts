@@ -166,6 +166,7 @@ pub fn propose_emergency_revocation(
     replacement: Address,
     nonce: u64,
 ) -> Result<(), ContractError> {
+    crate::staging::check_staging_access(env, &current_admin)?;
     let data: ContractData = env
         .storage()
         .instance()
@@ -429,6 +430,7 @@ pub fn propose_admin_change(
     current_admin: Address,
     new_admin: Address,
 ) -> Result<(), ContractError> {
+    crate::staging::check_staging_access(env, &current_admin)?;
     let data: ContractData = env
         .storage()
         .instance()

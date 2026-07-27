@@ -82,6 +82,7 @@ pub mod governance;
 pub mod math;
 pub mod recovery;
 pub mod slashing;
+pub mod staging;
 pub mod staking_tiers;
 pub mod storage;
 pub mod temp_governance;
@@ -425,6 +426,7 @@ impl TimeLockedUpgradeContract {
     ) -> Result<(), ContractError> {
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &proposer)?;
         let data = Self::_load_data(&env)?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
@@ -439,6 +441,7 @@ impl TimeLockedUpgradeContract {
         nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64,
     ) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &executor)?;
         let data = Self::_load_data(&env)?;
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
@@ -509,6 +512,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn cancel_upgrade(env: Env, canceller: Address) -> Result<(), ContractError> {
+        crate::staging::check_staging_access(&env, &canceller)?;
         let data = Self::_load_data(&env)?;
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
@@ -542,6 +546,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_value(env: Env, new_value: u64, caller: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &caller)?;
         let mut data = Self::_load_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
@@ -578,6 +583,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_heartbeat_interval(env: Env, interval: u64, admin: Address) -> Result<(), ContractError> {
         if interval == 0 { return Err(ContractError::InvalidHeartbeatInterval); }
+        crate::staging::check_staging_access(&env, &admin)?;
         let data = Self::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
@@ -624,6 +630,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn upsert_node_profile(env: Env, admin: Address, node: Address, rate: u64, confidence: u32) -> Result<(), ContractError> {
+        crate::staging::check_staging_access(&env, &admin)?;
         let data = Self::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
