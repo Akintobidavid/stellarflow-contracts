@@ -1234,6 +1234,8 @@ impl TimeLockedUpgradeContract {
     }
 }
 
+} // end impl TimeLockedUpgradeContract
+
 #[cfg(test)]
 mod query_guardrail_tests {
     use super::*;
