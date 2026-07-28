@@ -121,3 +121,23 @@ is a **documentation commit on `feat/issue-625-fuzz-harness`** (this file +
 `PR_DESCRIPTION.postmerge.md`), so the diff is visible on the PR. After this
 commit lands, this session's loop closes. Future progress lives with whoever
 has admin scope on `StellarFlow-Network/stellarflow-contracts`.
+
+## User-side handoff context
+
+The contributor who authored the production fix and the fuzz harness has
+confirmed that **they also cannot reach a browser from their laptop** at this
+session's closeout. Combined with the codespace-side constraints
+(`browser_use` unavailable; `GITHUB_TOKEN` is `pull: true`, `push: false`,
+no `triage` / `maintain` / `admin` on `StellarFlow-Network/stellarflow-contracts`),
+the squash-merge is **structurally undrivable from either end of the
+contribution path**. A maintainer in the StellarFlow-Network org with admin
+scope on the destination repo remains the single viable executor.
+
+## Conversation closure
+
+This closeout resolves the merge-driving loop that paged through 12+ identical
+probes (`state=OPEN`, `body=5 104 bytes`, `upstream/main=f6acd6b`, etc.). Both the
+in-session codespace's token-scope path and the contributor's browser-access
+path have been confirmed closed. The branch tip `ea2578e` (with this final
+follow-up commit) is the standing state of `feat/issue-625-fuzz-harness`.
+No further iterations on this PR's merge from this thread.
