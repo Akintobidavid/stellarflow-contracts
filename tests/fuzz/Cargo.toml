@@ -1,0 +1,22 @@
+[package]
+name = "stellarflow-contracts-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Property-based fuzz harness for AMM math invariants (issue #625)"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+proptest = "1.4"
+
+# Match the WASM-leaning release profile of the main contract but keep
+# the fuzz crate reasonably fast for nightly coverage runs.
+[profile.release]
+opt-level = 3
+lto = false
+debug = true
