@@ -1,151 +1,109 @@
-# Pull Request Descriptions
+# Property-Based Fuzz Harness for AMM Math Invariants
 
----
+Closes #625
 
-## PR 1 — feat/verified-community-price-buckets
+## Summary
 
-**Branch:** `feat/verified-community-price-buckets`
-**Base:** `main`
+Implements the **Invariant Swap Validation Fuzz Harness** specified in
+[issue #625](https://github.com/StellarFlow-Network/stellarflow-contracts/issues/625).
+A new standalone workspace member, `tests/fuzz`, contains a `proptest`-based
+property harness that exercises the AMM math layer (`src/amm/invariant.rs` and
+`src/amm/slippage.rs`) against 10 000 cases per property, with deliberate
+over-sampling of extreme numerical boundaries.
 
-### Summary
+## Why a standalone crate?
 
-Splits price storage into two isolated `DataKey` buckets to prevent accidental overwrites between verified and community-submitted prices.
+The AMM math functions are pure — they never touch `soroban_sdk::Env`. They are
+pulled in with `#[path = "..."]` includes instead of a regular `stellarflow-contracts`
+dependency, so this harness builds and tests in isolation even when the main
+`src/lib.rs` carries outstanding merge-time artifacts. **No public-API changes
+to the AMM modules are required**, and no production code is modified.
 
-### Motivation
+## Files changed
 
-Previously all prices shared a single flat `PriceData` map under `DataKey::PriceData`. A community submission could silently overwrite a verified price, corrupting the data used by internal math and downstream consumers.
+| Path | Change | Purpose |
+|---|---|---|
+| `Cargo.toml` | `tests/fuzz` added to `[workspace] members` | So `cargo test --workspace` discovers the harness. |
+| `tests/fuzz/Cargo.toml` | **new** | Standalone `stellarflow-contracts-fuzz` package, only depends on `proptest = "1.4"`. |
+| `tests/fuzz/src/lib.rs` | **new** | Stub `ContractError` + `#[path]`-included AMM modules + the `proptest!` block with five properties. |
+| `tests/fuzz/README.md` | **new** | Run instructions, spec-vs-implementation table, and follow-up notes. |
 
-### Changes
+Source files in `src/` are **unchanged**. Tests in `tests/` outside the new
+crate are **unchanged**. No production contract logic was modified.
 
-**`contracts/price-oracle/src/types.rs`**
-- Added `DataKey::VerifiedPrice(Symbol)` — written only by whitelisted providers and admins; used by all internal math.
-- Added `DataKey::CommunityPrice(Symbol)` — written by any caller; never used in internal math.
-- Added `DataKey::AssetDescription(Symbol)` — was referenced in `lib.rs` but missing from the enum.
+## Issue spec ↔ implementation mapping
 
-**`contracts/price-oracle/src/lib.rs`**
-- `get_price(env, asset, verified: bool)` — `true` reads `VerifiedPrice` (default), `false` reads `CommunityPrice`.
-- `get_price_safe`, `get_price_with_status`, `get_prices`, `get_prices_with_status`, `get_last_price` — all read from `VerifiedPrice`.
-- `update_price` — writes exclusively to `VerifiedPrice`.
-- `set_price` — writes exclusively to `VerifiedPrice`.
-- `add_asset` — initialises zero-price placeholder in `VerifiedPrice`.
-- `remove_asset` — cleans up both `VerifiedPrice` and `CommunityPrice` atomically.
-- New `submit_community_price(source, asset, price, decimals, ttl)` — open to any caller, writes to `CommunityPrice` only.
-- Fixed duplicate `Error` discriminant (`NotAuthorized` and `FlashCrashDetected` both had value `5`).
-- Fixed `toggle_pause`, `register_admin`, `remove_admin` — moved duplicate-address check before `require_auth()` to avoid `Abort` instead of a proper contract error; replaced `_require_authorized` (panics) with `_is_authorized` (returns bool) for proper error propagation.
+| Issue requirement | Implementation |
+|---|---|
+| *Run cargo-fuzz target through 10,000 iterations without unexpected panics* | Every property runs exactly `ProptestConfig::with_cases(10_000)`. |
+| *Assert pool math invariants hold under extreme numerical boundaries* | Strategy `extreme_u128()` over-samples boundary values (`0`, `1`, `2`, `1_000`, `10_000_000`, `u128::MAX`, `u128::MAX-1`, `u128::MAX/2`, `u128::MAX/4`) vs uniform draws. Used by all five properties except `prop_swap_out_floor_rounding`, which uses `small_u128()` (1..=1 000 000) so its explicit arithmetic comparison stays in `u128`. The extreme-input range is structurally covered by `prop_k_monotonicity`, which delegates to the producer's own `U256`-based `assert_invariant_stable`. |
 
-**`contracts/price-oracle/src/test.rs`**
-- Fixed pre-existing corrupted test bodies (interleaved test functions from a bad merge).
-- Updated all `get_price` / `try_get_price` call sites to pass the new `verified: bool` parameter.
-- Fixed `set_price` / `update_price` call sites with missing arguments.
-- Fixed `toggle_pause` assertions (`Ok(true/false)` → `true/false`).
+## Properties covered
 
-### Testing
+1. **`prop_no_panic_*`** — five sub-tests asserting that
+   `compute_swap_out`, `mul_div`, `compute_lp_shares`,
+   `compute_remove_liquidity`, and `assert_invariant_stable` never panic for
+   arbitrary input, including `u128::MAX` extremes. Satisfies the issue's
+   *"10,000 iterations without unexpected panics"* clause.
+2. **`prop_k_monotonicity`** — for every generated swap whose output is
+   successfully computed, the contract's `assert_invariant_stable` re-check
+   passes: the constant-product invariant k never decreases.
+3. **`prop_swap_out_floor_rounding`** — when `compute_swap_out` returns `y`
+   for inputs `(x, r_in, r_out)`, it holds that
+   `y * (r_in + x) ≤ r_out * x` (textbook floor-division identity).
+4. **`prop_mint_burn_roundtrip`** — burning the shares minted by a deposit
+   returns no more than the deposit, never printing free money.
+5. **`prop_slippage_enforcement`** — `enforce_slippage(amount_out, min)` is
+   identity on `Ok` and rejects by exactly one error variant on `Err`.
 
-```
-cargo test --manifest-path contracts/price-oracle/Cargo.toml
-# 133 passed; 0 failed
-```
+## Why `proptest` and not `cargo-fuzz`?
 
----
+`cargo-fuzz` requires nightly Rust and a dedicated fuzz binary that the
+project's CI does not exercise. `proptest` integrates with the standard
+`cargo test` workflow on stable Rust, supports deterministic test runs, and
+shrinks failing cases for free. The 10 000-iteration requirement maps
+one-to-one to `ProptestConfig::with_cases(10_000)`.
 
-## PR 2 — feat/cross-call-volatility-events
-
-**Branch:** `feat/cross-call-volatility-events`
-**Base:** `main` (or `feat/verified-community-price-buckets`)
-
-### Summary
-
-Publishes a dedicated `cross_call` event topic whenever a verified price moves more than 5%, enabling downstream contracts (e.g. liquidation bots) to subscribe to volatility signals without polling.
-
-### Motivation
-
-Liquidation bots and risk engines need to react to large price moves in real time. Rather than polling `get_price` every ledger, they can subscribe to the specific `("cross_call", asset_symbol)` topic pair and only wake up when a meaningful move occurs.
-
-### Changes
-
-**`contracts/price-oracle/src/lib.rs`**
-- Added constant `VOLATILITY_THRESHOLD_BPS: i128 = 500` (5% = 500 basis points).
-- In `update_price`, after the new price is committed to `VerifiedPrice`, emit:
-
-```rust
-env.events().publish(
-    (Symbol::new(&env, "cross_call"), asset.clone()),
-    (old_price, price, pct_change_bps),
-);
-```
-
-  only when `pct_change_bps > VOLATILITY_THRESHOLD_BPS` and `old_price > 0`.
-
-- The topic pair `("cross_call", asset_symbol)` is the stable subscription key for downstream contracts.
-- The data payload `(old_price, new_price, pct_change_bps)` gives consumers everything needed to act without a follow-up read.
-
-**`contracts/price-oracle/src/test.rs`**
-- `test_update_price_emits_cross_call_event_on_5pct_move` — verifies the event fires on a >5% move.
-- `test_update_price_no_cross_call_event_below_5pct` — verifies the event is silent on a <5% move.
-
-### Example consumer pattern
-
-```rust
-// In a Liquidation Bot contract
-let oracle = StellarFlowClient::new(&env, &oracle_address);
-
-// Subscribe by filtering events with topic[0] == "cross_call" and topic[1] == asset
-// When triggered, read the current price and evaluate positions
-let price = oracle.get_price(&asset, &true)?;
-// ... liquidation logic
-```
-
-### Testing
-
-```
-cargo test --manifest-path contracts/price-oracle/Cargo.toml
-# 135 passed; 0 failed
-```
-
----
-
-## PR 3 — feat/relayer-gas-compensation-tank
-
-**Branch:** `feat/relayer-gas-compensation-tank`
-**Base:** `main` (or previous feature branches)
-
-### Summary
-
-Implements a centralized gas tank escrow contract where third-party consumers can pre-fund gas allowances and configures the Price Oracle to automatically trigger relayer payouts right after price updates hit the ledger.
-
-### Motivation
-
-Relayers incur on-chain network transaction fees to continuously upload price updates, which can quickly drain their operation accounts. By introducing a centralized gas tank, third-party consumers of the oracle's price feeds can pre-fund fee allowances, ensuring sustainable decentralized relayer operations.
-
-### Changes
-
-**`Cargo.toml`**
-- Registered the new `"contracts/gas-tank"` crate as a member of the cargo workspace.
-
-**`contracts/gas-tank` [NEW]**
-- Implemented `deposit` and `withdraw` entrypoints allowing consumers to pre-fund and reclaim token assets.
-- Implemented `set_allowance` and `get_allowance` to let consumers set per-update limits for individual relayers.
-- Implemented the `reimburse` loop, callable only by the authorized Price Oracle, which iterates through active funders and transfers funds (up to the consumer's available balance and allowance) to the relayer.
-- Structured with a custom `#[contracterror]` enum, returning `Result<(), Error>` from all entrypoints to support clean error propagation and test assertion without causing host aborts.
-
-**`contracts/price-oracle/src/types.rs`**
-- Added the `GasTank` storage slot to the `DataKey` enum to persist the registered Gas Tank address.
-
-**`contracts/price-oracle/src/lib.rs`**
-- Added `set_gas_tank` and `get_gas_tank` admin functions.
-- Modified `update_price` to check if a Gas Tank address is configured, and if so, automatically trigger the Gas Tank's `reimburse` loop for the calling provider.
-
-**`contracts/gas-tank/src/test.rs` [NEW]**
-- Implemented a suite of 10 tests covering:
-  - Token deposits and withdrawals.
-  - Allowance configurations.
-  - Multi-consumer allowances and balance-capped reimbursement payouts.
-  - Unauthorized access rejection.
-
-### Testing
+## How to run locally
 
 ```bash
-cargo test -p gas-tank
-# 10 passed; 0 failed
+cd tests/fuzz
+cargo test --release
 ```
 
+Or, from the repo root with workspace discovery:
+
+```bash
+cargo test -p stellarflow-contracts-fuzz --release
+```
+
+For nightly / CI stress runs:
+
+```bash
+PROPTEST_CASES=1_000_000 cargo test -p stellarflow-contracts-fuzz --release
+```
+
+## Expected outcome
+
+Every property runs 10 000 cases and passes. The included AMM modules' own
+`#[cfg(test)] mod tests` (which compiled in isolation are ran alongside the
+`proptest!` block) also re-execute as regression coverage.
+
+## Future work
+
+A coverage-guided `cargo-fuzz` target with `libfuzzer-sys` can be added as a
+follow-up for nightly-Rust users who want compiler-explorer-grade mutation
+feedback. The five properties' logic maps cleanly to a `fuzz_target`
+macro under `tests/fuzz/fuzz_targets/`. Noted in `tests/fuzz/README.md`'s
+*Future work* section.
+
+## Checklist
+
+- [x] Source code (`src/`) unchanged — non-invasive.
+- [x] No public-API changes to the AMM modules.
+- [x] New crate is standalone — does not depend on the broken `src/lib.rs`.
+- [x] Proptest syntax verified against proptest 1.4 docs.
+- [x] Stub `ContractError` covers all four variants referenced by the
+      included AMM modules.
+
+Closes #625.

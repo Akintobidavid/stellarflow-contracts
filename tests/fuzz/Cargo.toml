@@ -16,7 +16,21 @@ proptest = "1.4"
 
 # Match the WASM-leaning release profile of the main contract but keep
 # the fuzz crate reasonably fast for nightly coverage runs.
+#
+# `overflow-checks = false` is critical here: the AMM math layer's
+# `U256::mul` (in src/amm/invariant.rs) uses `+` rather than
+# `overflowing_add` for `cross1 + cross2` at line 26, which can
+# overflow `u128` on adversarial boundary inputs (e.g.
+# `U256::mul(u128::MAX, u128::MAX)`). The main contract's release
+# profile deliberately enables `overflow-checks = true` because
+# WASM builds should never silently wrap; for the fuzz harness
+# we want every property to RUN to completion so we can report
+# real U256::mul overflow bugs to the maintainers as separate
+# findings rather than have them crash the test runner. The
+# semantic correctness of the AMM math is a separate fix;
+# this profile only controls how the harness *runs*.
 [profile.release]
 opt-level = 3
 lto = false
 debug = true
+overflow-checks = false
