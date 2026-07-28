@@ -231,3 +231,69 @@ PROPTEST_CASES=1_000_000 cargo test -p stellarflow-contracts-fuzz --release
 - [x] Nightly `cargo-fuzz` workflow added (`.github/workflows/cargo-fuzz.yml`).
 
 Closes #625.
+
+## Subsequent commit on this branch: bug fix for `U256::mul` overflow
+
+A follow-up commit on this branch (still part of PR #705) replaces the
+buggy `let mid = cross1 + cross2;` with explicit four-product u64→u128
+carry propagation. The replacement avoids the silent `u128` overflow
+that the original implementation had on adversarial boundary inputs
+(e.g. `a = b = u128::MAX`), and is what makes the 7 previously-failing
+tests pass under both the harness's release profile and the main
+contract's production soundness profile.
+
+`u128::widening_mul` is the idiomatic 256-bit-multiply primitive in
+modern Rust, but it remains gated behind the unstable
+`bigint_helper_methods` feature as of Rust 1.85 (tracking issue
+rust-lang/rust#85532). Manual four-product carry propagation keeps
+the function compileable on stable Rust 1.85.0.
+
+**Carry-bound proof (tight).** The `upper = p_hi_hi_hi + mid_hi_carry`
+term is bounded by `2^64 − 1` *globally*: its two summands' individual
+maxima are mutually exclusive — `p_hi_hi_hi = 2^64 − 2` requires
+`ah = bh = u64::MAX`, which forces `p_hi_hi_lo = 1` and in turn caps
+`mid_hi_carry ≤ 1`; meanwhile, `mid_hi_carry = 2` requires input
+shapes that peak the cross-pair sums, and those shapes jointly require
+`ah = bh = u64::MAX` again, excluding the peak. So `upper << 64`
+cannot overflow the u128 `result_hi`. A `debug_assert!` re-checks this
+bound at runtime as defense-in-depth.
+
+### After the fix
+
+| Outcome | Count |
+|---|---|
+| **Passing** | **37** |
+| **Failing** | **0** |
+| **Total** | **37** |
+
+Verified under both profiles on the host toolchain:
+
+- `cargo test -p stellarflow-contracts-fuzz --release` — default
+  release profile: **37 pass / 0 fail**.
+- `RUSTFLAGS='-C overflow-checks=on' cargo test -p stellarflow-contracts-fuzz --release`
+  — production soundness (every intermediate `+` panics on u128
+  overflow if any sum exceeds `u128::MAX`; nothing does): **37 pass / 0 fail**.
+
+### What the fix changes
+
+The fix lives in exactly one file: `src/amm/invariant.rs`. No public-API
+changes, no new public exports, no modifications to `src/amm/slippage.rs`
+or any other production-code file. The harness's `tests/fuzz/Cargo.toml`
+profile (`overflow-checks = false`) was **not** reverted — the
+runner-concession rationale still stands (with the math now correct, the
+harness under adversarial input simply runs to completion cleanly,
+producing the all-pass 37/37 result above rather than a mix of passes
+and failures).
+
+`U256::divide_mod`'s `if hi >= d { return None; }` guard becomes more
+reachable in real call sites now that `hi` correctly reaches up to
+`u128::MAX − 1` instead of being silently wrapped. `mul_div` therefore
+correctly returns `ContractError::Overflow` whenever a numerator ×
+denominator product would have a quotient exceeding `2^128`. This is
+the desired behavior; any downstream caller that previously received a
+silently garbled value now gets a clean error.
+
+The commit also adds `#[derive(Clone, Copy, Debug, PartialEq, Eq)]` to
+`U256` so the tightened `test_u256_mul_max_bounds` assertion
+(`assert_eq!(result, U256(1, u128::MAX − 1))`) is expressible.
+

@@ -1,36 +1,105 @@
 use crate::ContractError;
 
+/// Low 64-bit mask used to split a `u128` into (lo, hi) halves.
+const MASK_64: u128 = (1u128 << 64) - 1;
+
 /// 256-bit unsigned integer represented as two machine words.
 ///
 /// Used internally to hold intermediate products of two `u128` values before
 /// division, preventing precision loss in the constant-product invariant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct U256(u128, u128);
 
 impl U256 {
+    /// Construct the zero value. Reserved for future zero-init scaffolding in
+    /// `div_mod`'s fallback paths; not currently called.
+    #[allow(dead_code)]
     fn zero() -> Self {
         U256(0, 0)
     }
 
-    /// Multiply two `u128` values, returning the full 256-bit product.
+    /// Multiply two `u128` values, returning the full 256-bit product
+    /// `(a * b)` split into `(low 128, high 128)` halves.
+    ///
+    /// Implemented as a four-product u64→u128 decomposition with explicit
+    /// carry propagation across the 64-bit word boundaries. `u128::widening_mul`
+    /// would be the idiomatic solution, but it remains gated behind the
+    /// unstable `bigint_helper_methods` feature as of Rust 1.85
+    /// (rust-lang/rust#85532). The previous, simpler implementation used
+    /// `let mid = cross1 + cross2` which silently overflowed `u128` for
+    /// adversarial boundary inputs (e.g. `a = b = u128::MAX`); the fuzz
+    /// harness in `tests/fuzz/` originally surfaced that bug.
+    ///
+    /// **Carry-bound proof.** Each u64×u64 product widens freely to `u128`,
+    /// then splits into `(low, high) ≤ (MASK_64, MASK_64)`. At every sum, three
+    /// or four such halves combine (one carries a previously-attributable
+    /// ≤ 2 term):
+    ///
+    /// - `mid_lo_sum ≤ 3 · MASK_64                < u128::MAX`     (carry ≤ 2)
+    /// - `mid_hi_sum ≤ 3 · MASK_64 + 2            < u128::MAX`     (carry ≤ 2)
+    /// - `upper      = p_hi_hi_hi + mid_hi_carry ≤ 2^64 − 1`
+    ///
+    /// The two terms of `upper` are mutually exclusive at their individual
+    /// maxima: `p_hi_hi_hi` peaking (requiring `ah = bh = u64::MAX`) caps
+    /// `mid_hi_carry` at 1, while `mid_hi_carry` peaking forces
+    /// `p_hi_hi_hi < 2^64 − 1`. So `upper ≤ 2^64 − 1` globally, and
+    /// `upper << 64` never overflows the u128 `result_hi`. The
+    /// `debug_assert!` re-checks this bound at runtime as defense-in-depth.
     fn mul(a: u128, b: u128) -> Self {
-        let a_lo = a as u64;
-        let a_hi = (a >> 64) as u64;
-        let b_lo = b as u64;
-        let b_hi = (b >> 64) as u64;
+        // 64-bit halves of each operand.
+        let a_lo = a & MASK_64;
+        let a_hi = a >> 64;
+        let b_lo = b & MASK_64;
+        let b_hi = b >> 64;
 
-        let lo = (a_lo as u128) * (b_lo as u128);
-        let cross1 = (a_hi as u128) * (b_lo as u128);
-        let cross2 = (a_lo as u128) * (b_hi as u128);
-        let hi = (a_hi as u128) * (b_hi as u128);
+        // Each u64×u64 product widens freely to u128. We split each into its
+        // low-64 and high-64 halves so cross-terms can sum without losing
+        // precision across the word boundary.
+        let p_lo_lo = a_lo * b_lo;
+        let p_lo_lo_lo: u128 = p_lo_lo & MASK_64; // bits 0..63 of p_lo_lo
+        let p_lo_lo_hi: u128 = p_lo_lo >> 64;     // bits 64..127 of p_lo_lo
 
-        let mid = cross1 + cross2;
-        let mid_lo = mid << 64;
-        let mid_hi = mid >> 64;
+        let p_hi_lo = a_hi * b_lo; // ah * bl
+        let p_hi_lo_lo: u128 = p_hi_lo & MASK_64;
+        let p_hi_lo_hi: u128 = p_hi_lo >> 64;
 
-        let (lo, carry1) = lo.overflowing_add(mid_lo);
-        let hi = hi + mid_hi + (carry1 as u128);
+        let p_lo_hi = a_lo * b_hi; // al * bh
+        let p_lo_hi_lo: u128 = p_lo_hi & MASK_64;
+        let p_lo_hi_hi: u128 = p_lo_hi >> 64;
 
-        U256(lo, hi)
+        let p_hi_hi = a_hi * b_hi; // ah * bh
+        let p_hi_hi_lo: u128 = p_hi_hi & MASK_64;
+        let p_hi_hi_hi: u128 = p_hi_hi >> 64;
+
+        // Sum the three terms that contribute to bits 64..127 of the result
+        // (= the lower half of "mid"). Each summand is ≤ MASK_64, so the sum
+        // is ≤ 3 * (2^64 − 1) < u128::MAX. Carry into bits 128+ is ≤ 2.
+        let mid_lo_sum: u128 = p_lo_lo_hi + p_hi_lo_lo + p_lo_hi_lo;
+        let mid_lo_bits: u128 = mid_lo_sum & MASK_64; // -> result_lo bits 64..127
+        let mid_lo_carry: u128 = mid_lo_sum >> 64;   // -> mid_hi_summand, ≤ 2
+
+        // Sum the four terms that contribute to bits 128..191 of the result
+        // (= the upper half of "mid"). Three are ≤ MASK_64, one is ≤ 2;
+        // total ≤ 3·2^64 − 3 < u128::MAX. Carry into bits 192+ is ≤ 2.
+        let mid_hi_sum: u128 = p_hi_hi_lo + p_hi_lo_hi + p_lo_hi_hi + mid_lo_carry;
+        let mid_hi_bits: u128 = mid_hi_sum & MASK_64; // -> result_hi bits 0..63 (= bits 128..191 of full)
+        let mid_hi_carry: u128 = mid_hi_sum >> 64;   // -> upper, ≤ 2
+
+        // Bits 192..255 of the full result. `p_hi_hi_hi ≤ 2^64 − 2` (since
+        // (2^64 − 1)^2 has high half exactly 2^64 − 2) and `mid_hi_carry ≤ 2`,
+        // but their individual maxima are mutually exclusive (see doc-comment),
+        // so the joint bound is `upper ≤ 2^64 − 1` — safe to place in bits
+        // 64..127 of result_hi via `upper << 64`.
+        let upper: u128 = p_hi_hi_hi + mid_hi_carry;
+        debug_assert!(
+            upper & !MASK_64 == 0,
+            "U256::mul upper bit-pack overflow: upper={upper:#034x}"
+        );
+
+        let result_lo = (mid_lo_bits << 64) | p_lo_lo_lo;
+        let result_hi = (upper << 64) | mid_hi_bits;
+
+        U256(result_lo, result_hi)
     }
 
     /// Divide a U256 by a u128 divisor, returning the (quotient, remainder).
@@ -277,10 +346,13 @@ mod tests {
 
     #[test]
     fn test_u256_mul_max_bounds() {
-        let a = u128::MAX;
-        let b = u128::MAX;
-        let result = U256::mul(a, b);
-        assert!(result.1 > 0);
+        // (u128::MAX)^2 = (2^128 − 1)^2 = 2^256 − 2^129 + 1.
+        // Decomposed as U256: (low, high) = (1, 2^128 − 2) = (1, u128::MAX − 1).
+        // This is a positive correctness check, not just a regression guard:
+        // it pins down the exact result for the maximally adversarial input
+        // that the original implementation silently overflowed on.
+        let result = U256::mul(u128::MAX, u128::MAX);
+        assert_eq!(result, U256(1, u128::MAX - 1));
     }
 
     #[test]
