@@ -1,16 +1,17 @@
 use soroban_sdk::{
-    symbol_short, Address, Env,
+    symbol_short,
     testutils::{Address as _, Ledger},
+    Address, Env,
 };
 
 mod mocks;
-use mocks::token_mocks::{
-    mock_approve, mock_allowance, mock_balance_of, mock_set_balance, mock_transfer,
-    mock_transfer_from, setup_mock_token_state, MockTokenState,
-};
 use mocks::oracle_mocks::{
-    mock_oracle_get_price, mock_oracle_has_price, mock_oracle_set_prices,
-    mock_oracle_update_price, mock_oracle_advance_time, setup_mock_oracle,
+    mock_oracle_advance_time, mock_oracle_get_price, mock_oracle_has_price, mock_oracle_set_prices,
+    mock_oracle_update_price, setup_mock_oracle,
+};
+use mocks::token_mocks::{
+    mock_allowance, mock_approve, mock_balance_of, mock_set_balance, mock_transfer,
+    mock_transfer_from, setup_mock_token_state, MockTokenState,
 };
 
 /// Integration test: mock token setup, approval, and transfer work
@@ -26,16 +27,21 @@ fn test_mock_token_approval_and_transfer_offline() {
     let recipient = Address::generate(&env);
 
     // Set up a mock token contract with an initial balance for `owner`.
-    let token_state = setup_mock_token_state(
-        &env,
-        &admin,
-        &[(owner.clone(), 1_000_000_i128)],
-    );
+    let token_state = setup_mock_token_state(&env, &admin, &[(owner.clone(), 1_000_000_i128)]);
 
     // Verify the initial balance was minted correctly.
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &owner), 1_000_000_i128);
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &spender), 0_i128);
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &recipient), 0_i128);
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &owner),
+        1_000_000_i128
+    );
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &spender),
+        0_i128
+    );
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &recipient),
+        0_i128
+    );
 
     // Simulate owner approving spender to spend up to 500_000 tokens.
     mock_approve(&env, &token_state.token_id, &owner, &spender, 500_000_i128);
@@ -55,9 +61,18 @@ fn test_mock_token_approval_and_transfer_offline() {
     );
 
     // Verify balances after the transfer.
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &owner), 800_000_i128);
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &spender), 0_i128);
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &recipient), 200_000_i128);
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &owner),
+        800_000_i128
+    );
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &spender),
+        0_i128
+    );
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &recipient),
+        200_000_i128
+    );
 }
 
 /// Integration test: mock oracle price updates work entirely offline.
@@ -103,8 +118,14 @@ fn test_mock_oracle_price_updates_offline() {
         &[(ghs.clone(), 4_500_000_i128), (ngn.clone(), 1_600_000_i128)],
     );
 
-    assert_eq!(mock_oracle_get_price(&env, &oracle_id, ghs).unwrap(), 4_500_000_i128);
-    assert_eq!(mock_oracle_get_price(&env, &oracle_id, ngn).unwrap(), 1_600_000_i128);
+    assert_eq!(
+        mock_oracle_get_price(&env, &oracle_id, ghs).unwrap(),
+        4_500_000_i128
+    );
+    assert_eq!(
+        mock_oracle_get_price(&env, &oracle_id, ngn).unwrap(),
+        1_600_000_i128
+    );
 
     // Advance ledger time and verify the oracle still works.
     mock_oracle_advance_time(&env, 3600);
@@ -124,11 +145,7 @@ fn test_offline_trade_with_token_and_oracle_mocks() {
     let counterparty = Address::generate(&env);
 
     // Deploy a mock token contract and mint tokens to the trader.
-    let token_state = setup_mock_token_state(
-        &env,
-        &admin,
-        &[(trader.clone(), 10_000_000_i128)],
-    );
+    let token_state = setup_mock_token_state(&env, &admin, &[(trader.clone(), 10_000_000_i128)]);
 
     // Deploy a mock oracle and set the NGN/USDC price.
     let (oracle_id, _oracle_client) = setup_mock_oracle(&env);
@@ -148,10 +165,19 @@ fn test_offline_trade_with_token_and_oracle_mocks() {
     assert_eq!(ngn_price, 1_500_000_i128);
 
     // Verify trader has sufficient balance.
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &trader), 10_000_000_i128);
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &trader),
+        10_000_000_i128
+    );
 
     // Approve the counterparty to receive tokens on behalf of the trader.
-    mock_approve(&env, &token_state.token_id, &trader, &counterparty, sell_amount);
+    mock_approve(
+        &env,
+        &token_state.token_id,
+        &trader,
+        &counterparty,
+        sell_amount,
+    );
     assert_eq!(
         mock_allowance(&env, &token_state.token_id, &trader, &counterparty),
         sell_amount
@@ -168,8 +194,14 @@ fn test_offline_trade_with_token_and_oracle_mocks() {
     );
 
     // Verify post-trade balances.
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &trader), 10_000_000 - sell_amount);
-    assert_eq!(mock_balance_of(&env, &token_state.token_id, &counterparty), sell_amount);
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &trader),
+        10_000_000 - sell_amount
+    );
+    assert_eq!(
+        mock_balance_of(&env, &token_state.token_id, &counterparty),
+        sell_amount
+    );
 
     // Verify the oracle price is still accessible (no side effects).
     assert_eq!(

@@ -54,10 +54,7 @@ where
             .budget()
             .cpu_instruction_cost()
             .saturating_sub(cpu_before),
-        memory_bytes: env
-            .budget()
-            .memory_bytes_cost()
-            .saturating_sub(mem_before),
+        memory_bytes: env.budget().memory_bytes_cost().saturating_sub(mem_before),
     };
     usage.log();
     usage

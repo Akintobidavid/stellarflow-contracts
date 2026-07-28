@@ -1,8 +1,5 @@
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env,
-};
 use soroban_sdk::token;
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
 /// Represents the state of a mock token contract.
 pub struct MockTokenState {
@@ -30,7 +27,13 @@ pub fn setup_mock_token_state(
 }
 
 /// Simulate a token approval: `owner` approves `spender` to spend `amount`.
-pub fn mock_approve(env: &Env, token_id: &Address, owner: &Address, spender: &Address, amount: i128) {
+pub fn mock_approve(
+    env: &Env,
+    token_id: &Address,
+    owner: &Address,
+    spender: &Address,
+    amount: i128,
+) {
     env.mock_all_auths();
     let client = token::Client::new(env, token_id);
     client.approve(owner, spender, &amount);

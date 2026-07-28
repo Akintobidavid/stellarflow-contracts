@@ -6,8 +6,8 @@ use soroban_sdk::{
 
 /// The main contract from the root crate.
 use stellarflow_contracts::{
-    ContractError, TimeLockedUpgradeContract, TimeLockedUpgradeContractClient,
-    DEFAULT_HEARTBEAT_INTERVAL, PriceVarianceConfig, StakingTierConfig,
+    ContractError, PriceVarianceConfig, StakingTierConfig, TimeLockedUpgradeContract,
+    TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -223,7 +223,9 @@ fn test_deposit_set_and_get_staking_tier_config() {
         tier4_min: 10000,
     };
     let signers: Vec<Address> = Vec::new(&env);
-    assert!(client.try_set_staking_tier_config(&admin, &config, &signers).is_err());
+    assert!(client
+        .try_set_staking_tier_config(&admin, &config, &signers)
+        .is_err());
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

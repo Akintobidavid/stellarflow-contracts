@@ -40,6 +40,8 @@ pub fn consume_nonce(
     };
 
     let key = NonceKey::State(coordinator.clone());
+    // Replay-protection state is intentionally durable. Moving this counter
+    // to temporary storage would allow an expired nonce to be replayed.
     env.storage()
         .persistent()
         .set(&key, &next_state);
