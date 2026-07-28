@@ -44,7 +44,7 @@ proptest = "=1.4.0"
 # for both strict and relaxed overflow profiles.
 #
 # Other release-profile choices match the main contract's WASM-leaning
-# defaults.
+# profile.release block.
 [profile.release]
 opt-level = 3
 lto = false
