@@ -207,7 +207,7 @@ pub enum ContractError {
 pub(crate) const DATA_KEY: Symbol = symbol_short!("DATA");
 pub(crate) const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
 const PENDING_UPGRADE_KEY: Symbol = symbol_short!("PENDING");
-pub(crate) const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60;
+pub(crate) use crate::upgrades::timelock::WASM_UPGRADE_DELAY_SECONDS as UPGRADE_DELAY_SECONDS;
 pub(crate) const STAKE_REGISTRY_KEY: Symbol = symbol_short!("STAKES");
 pub(crate) const TOTAL_STAKED_KEY: Symbol = symbol_short!("TOTAL");
 const HEARTBEAT_KEY: Symbol = symbol_short!("HBEAT");
@@ -443,7 +443,10 @@ impl TimeLockedUpgradeContract {
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
         consume_nonce(&env, &proposer, nonce, salt, salt_signature)?;
-        let staged = StagedUpgrade { new_wasm_hash, proposer, staged_at: env.ledger().timestamp() };
+        let staged_at = env.ledger().timestamp();
+        let execute_at = crate::upgrades::timelock::execution_timestamp(staged_at)
+            .ok_or(ContractError::MathOverflow)?;
+        let staged = StagedUpgrade { new_wasm_hash, proposer, staged_at, execute_at };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
         Ok(())
     }
@@ -464,7 +467,7 @@ impl TimeLockedUpgradeContract {
             .instance()
             .get(&PENDING_UPGRADE_KEY)
             .ok_or(ContractError::NoPendingUpgrade)?;
-        if !verify_staged_delay(pending.staged_at, env.ledger().timestamp(), UPGRADE_DELAY_SECONDS) {
+        if !crate::upgrades::timelock::is_ready(pending.execute_at, env.ledger().timestamp()) {
             return Err(ContractError::UpgradeTimelockNotSatisfied);
         }
         // Store pre-upgrade contract data snapshot for health check validation
@@ -518,8 +521,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn get_upgrade_timelock_remaining(env: Env) -> Option<u64> {
         env.storage().instance().get(&PENDING_UPGRADE_KEY).map(|staged: StagedUpgrade| {
-            let elapsed = env.ledger().timestamp().saturating_sub(staged.staged_at);
-            UPGRADE_DELAY_SECONDS.saturating_sub(elapsed)
+            staged.execute_at.saturating_sub(env.ledger().timestamp())
         })
     }
 

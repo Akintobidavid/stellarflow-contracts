@@ -158,6 +158,8 @@ pub struct StagedUpgrade {
     pub new_wasm_hash: BytesN<32>,
     pub proposer: Address,
     pub staged_at: u64,
+    /// Earliest ledger timestamp at which the replacement may execute.
+    pub execute_at: u64,
 }
 
 #[contracttype]
