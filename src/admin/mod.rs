@@ -1,3 +1,5 @@
+pub mod cleanup;
+
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, TryFromVal, Val, Vec};
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};
 use crate::storage::{SignerKey, RevokedSignerKey};
