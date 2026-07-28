@@ -12,7 +12,15 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-proptest = "1.4"
+# Pinned exactly (=1.4.0) to stop Cargo.lock transitive churn. The harness
+# uses proptest 1.4-era syntax (`prop_oneof!` with bare strategies, no
+# weighted-strategy syntax) which is fully supported by =1.4.0. Caret
+# requirements (^1.4) resolved to the latest 1.x release at lock-time,
+# pulling in newer `rand` (0.9), `tempfile` (3.27), `getrandom` (0.3/0.4),
+# `bit-set`/`bit-vec`/`bitflags` (2.x), `linux-raw-sys`, etc. Pinning
+# freezes the entire transitive tree at versions consistent with
+# proptest-1.4.0's own dependency declarations.
+proptest = "=1.4.0"
 
 # Match the WASM-leaning release profile of the main contract but keep
 # the fuzz crate reasonably fast for nightly coverage runs.
