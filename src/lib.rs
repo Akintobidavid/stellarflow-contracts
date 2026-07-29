@@ -73,7 +73,11 @@ use crate::nonce::{consume_nonce, get_nonce};
 pub mod amm;
 pub mod admin;
 pub mod auth;
+pub mod bridge;
 pub mod config;
+pub mod orders;
+pub mod roles;
+pub mod vaults;
 pub use config::{get_price_variance_config, set_price_variance_config, PriceVarianceConfig};
 pub mod consensus;
 pub mod events;
@@ -201,6 +205,62 @@ pub enum ContractError {
     InsufficientBondForPenalty = 46,
     /// The final swap output is below the caller's minimum acceptable amount.
     SlippageExceeded = 47,
+
+    // ── Issue #703: Revocable admin role delegation with expiration ────────
+    /// `grant_role` was called with an `expiration_ledger` at or before the
+    /// current ledger sequence.
+    RoleExpirationInPast = 200,
+    /// `revoke_role` targeted a `(grantee, role)` pair with no active grant.
+    RoleNotFound = 201,
+    /// `require_role` was not satisfied: the grant is missing, revoked, or
+    /// its `expiration_ledger` has been reached.
+    RoleExpiredOrMissing = 202,
+
+    // ── Issue #694: Auto-compounding yield vault ────────────────────────────
+    /// A vault entrypoint that requires a positive value received zero or a
+    /// negative amount.
+    VaultZeroAmount = 210,
+    /// The vault has not been initialized via `init_vault`.
+    VaultNotInitialized = 211,
+    /// `init_vault` was called on a vault that is already configured.
+    VaultAlreadyInitialized = 212,
+    /// `vault_withdraw` requested more shares than the caller holds.
+    VaultInsufficientShares = 213,
+    /// `set_vault_performance_fee` exceeded `MAX_PERFORMANCE_FEE_BPS`.
+    VaultInvalidPerformanceFee = 214,
+    /// The vault's tracked assets are insufficient to honor a withdrawal.
+    VaultInsufficientBalance = 215,
+
+    // ── Issue #701: On-chain limit order book ───────────────────────────────
+    /// No limit order exists for the given order id.
+    OrderNotFound = 220,
+    /// `cancel_limit_order` was called by an address other than the maker.
+    OrderNotMaker = 221,
+    /// A limit order entrypoint received a zero or negative amount.
+    OrderZeroAmount = 222,
+    /// `place_limit_order` was called with a non-positive `price_tick`.
+    OrderInvalidPrice = 223,
+    /// `fill_limit_order` requested more than the order's remaining balance.
+    OrderInsufficientRemaining = 224,
+    /// The targeted order has already been fully filled or cancelled.
+    OrderAlreadyClosed = 225,
+
+    // ── Issue #692: Wrapped cross-chain asset mint/burn controls ────────────
+    /// No wrapped asset has been registered under the given asset code.
+    BridgeAssetNotRegistered = 230,
+    /// `register_wrapped_asset` was called for an asset code already in use.
+    BridgeAssetAlreadyRegistered = 231,
+    /// `mint_wrapped`/`burn_wrapped` was called by an address other than the
+    /// asset's registered Bridge Controller.
+    BridgeNotController = 232,
+    /// A mint would push `total_supply` above the configured `max_supply`.
+    BridgeSupplyCapExceeded = 233,
+    /// A mint/burn entrypoint received a zero or negative amount.
+    BridgeInvalidAmount = 234,
+    /// `burn_wrapped` requested more than the target's wrapped balance.
+    BridgeInsufficientBalance = 235,
+    /// `register_wrapped_asset` was called with a non-positive `max_supply`.
+    BridgeInvalidMaxSupply = 236,
 }
 
 // Contract state keys
@@ -1133,6 +1193,142 @@ impl TimeLockedUpgradeContract {
             (node, pool, payload_timestamp),
         );
         Ok(())
+    }
+
+    // ── Revocable admin role delegation with expiration (Issue #703) ────────
+
+    /// Grant `role` to `grantee` until (but excluding) `expiration_ledger`.
+    /// Admin-only.
+    pub fn grant_role(
+        env: Env, admin: Address, grantee: Address, role: roles::Role, expiration_ledger: u32,
+    ) -> Result<roles::RoleGrant, ContractError> {
+        roles::grant_role(&env, admin, grantee, role, expiration_ledger)
+    }
+
+    /// Explicit admin override: revoke a role before its natural expiration.
+    pub fn revoke_role(env: Env, admin: Address, grantee: Address, role: roles::Role) -> Result<(), ContractError> {
+        roles::revoke_role(&env, admin, grantee, role)
+    }
+
+    /// Returns `true` only when `grantee` currently holds a live (non-expired,
+    /// non-revoked) grant of `role`.
+    pub fn has_role(env: Env, grantee: Address, role: roles::Role) -> bool {
+        roles::has_role(&env, &grantee, role)
+    }
+
+    pub fn get_role_grant(env: Env, grantee: Address, role: roles::Role) -> Option<roles::RoleGrant> {
+        roles::get_role_grant(&env, grantee, role)
+    }
+
+    // ── Auto-compounding yield vault (Issue #694) ────────────────────────────
+
+    pub fn init_vault(
+        env: Env, admin: Address, asset: Address, fee_recipient: Address,
+    ) -> Result<vaults::autocompound::VaultConfig, ContractError> {
+        vaults::autocompound::initialize(&env, admin, asset, fee_recipient)
+    }
+
+    pub fn set_vault_performance_fee(
+        env: Env, admin: Address, fee_bps: u32,
+    ) -> Result<vaults::autocompound::VaultConfig, ContractError> {
+        vaults::autocompound::set_performance_fee(&env, admin, fee_bps)
+    }
+
+    pub fn vault_deposit(env: Env, depositor: Address, amount: i128) -> Result<i128, ContractError> {
+        vaults::autocompound::deposit(&env, depositor, amount)
+    }
+
+    pub fn vault_withdraw(env: Env, owner: Address, shares: i128) -> Result<i128, ContractError> {
+        vaults::autocompound::withdraw(&env, owner, shares)
+    }
+
+    /// Keeper-facing harvest: pulls `yield_amount` from `keeper`, skims the
+    /// configured performance fee, and compounds the remainder into the vault.
+    pub fn vault_harvest(
+        env: Env, keeper: Address, yield_amount: i128,
+    ) -> Result<vaults::autocompound::HarvestResult, ContractError> {
+        vaults::autocompound::harvest(&env, keeper, yield_amount)
+    }
+
+    pub fn vault_total_assets(env: Env) -> i128 {
+        vaults::autocompound::get_total_assets(&env)
+    }
+
+    pub fn vault_total_shares(env: Env) -> i128 {
+        vaults::autocompound::get_total_shares(&env)
+    }
+
+    pub fn vault_share_balance(env: Env, holder: Address) -> i128 {
+        vaults::autocompound::get_share_balance(&env, holder)
+    }
+
+    pub fn vault_config(env: Env) -> Option<vaults::autocompound::VaultConfig> {
+        vaults::autocompound::get_config(&env)
+    }
+
+    // ── On-chain limit order book (Issue #701) ───────────────────────────────
+
+    pub fn place_limit_order(
+        env: Env, maker: Address, pair: orders::limit::AssetPair, price_tick: i128, sell_amount: i128,
+    ) -> Result<orders::limit::LimitOrder, ContractError> {
+        orders::limit::place_order(&env, maker, pair, price_tick, sell_amount)
+    }
+
+    pub fn fill_limit_order(
+        env: Env, filler: Address, order_id: u64, fill_amount: i128,
+    ) -> Result<orders::limit::FillResult, ContractError> {
+        orders::limit::fill_order(&env, filler, order_id, fill_amount)
+    }
+
+    /// Cancel a still-open order and return its unfilled balance to the maker.
+    pub fn cancel_limit_order(env: Env, maker: Address, order_id: u64) -> Result<i128, ContractError> {
+        orders::limit::cancel_order(&env, maker, order_id)
+    }
+
+    pub fn get_limit_order(env: Env, order_id: u64) -> Option<orders::limit::LimitOrder> {
+        orders::limit::get_order(&env, order_id)
+    }
+
+    pub fn get_orders_at_tick(env: Env, pair: orders::limit::AssetPair, price_tick: i128) -> Vec<u64> {
+        orders::limit::get_orders_at_tick(&env, pair, price_tick)
+    }
+
+    // ── Wrapped cross-chain asset mint/burn controls (Issue #692) ───────────
+
+    pub fn register_wrapped_asset(
+        env: Env, admin: Address, asset_code: Symbol, controller: Address, max_supply: i128,
+    ) -> Result<bridge::mint::BridgeAssetConfig, ContractError> {
+        bridge::mint::register_wrapped_asset(&env, admin, asset_code, controller, max_supply)
+    }
+
+    pub fn set_bridge_controller(
+        env: Env, admin: Address, asset_code: Symbol, new_controller: Address,
+    ) -> Result<bridge::mint::BridgeAssetConfig, ContractError> {
+        bridge::mint::set_bridge_controller(&env, admin, asset_code, new_controller)
+    }
+
+    /// Mint wrapped `asset_code` to `to`. Restricted to the asset's
+    /// registered Bridge Controller and capped by `max_supply`.
+    pub fn mint_wrapped(
+        env: Env, controller: Address, asset_code: Symbol, to: Address, amount: i128,
+    ) -> Result<i128, ContractError> {
+        bridge::mint::mint(&env, controller, asset_code, to, amount)
+    }
+
+    /// Burn wrapped `asset_code` from `from`. Restricted to the asset's
+    /// registered Bridge Controller.
+    pub fn burn_wrapped(
+        env: Env, controller: Address, asset_code: Symbol, from: Address, amount: i128,
+    ) -> Result<i128, ContractError> {
+        bridge::mint::burn(&env, controller, asset_code, from, amount)
+    }
+
+    pub fn wrapped_balance_of(env: Env, asset_code: Symbol, holder: Address) -> i128 {
+        bridge::mint::balance_of(&env, asset_code, holder)
+    }
+
+    pub fn wrapped_asset_config(env: Env, asset_code: Symbol) -> Option<bridge::mint::BridgeAssetConfig> {
+        bridge::mint::get_config(&env, asset_code)
     }
 
     // --- Private Helpers ---
