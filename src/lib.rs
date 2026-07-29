@@ -201,6 +201,8 @@ pub enum ContractError {
     InsufficientBondForPenalty = 46,
     /// The final swap output is below the caller's minimum acceptable amount.
     SlippageExceeded = 47,
+    /// Invalid input parameter provided to a function.
+    InvalidInput = 48,
 }
 
 // Contract state keys
