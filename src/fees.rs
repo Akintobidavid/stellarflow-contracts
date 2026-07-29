@@ -31,6 +31,48 @@ pub struct CorridorFeePool {
 #[contracttype]
 pub enum FeesStorageKey {
     CorridorPool(AssetId),
+    VolumeHistory(AssetId),
+    DynamicFee(AssetId),
+}
+
+/// Historical volume tracking to calculate volume delta
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VolumeHistory {
+    pub previous_period_volume: u64,
+    pub current_period_volume: u64,
+    pub last_updated: u64, // timestamp when period was last rotated
+}
+
+impl VolumeHistory {
+    fn new() -> Self {
+        Self {
+            previous_period_volume: 0,
+            current_period_volume: 0,
+            last_updated: 0,
+        }
+    }
+}
+
+/// Dynamic fee configuration and current state
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DynamicFeeState {
+    pub min_fee_bps: u32,  // 5 = 0.05%
+    pub max_fee_bps: u32,  // 30 = 0.30%
+    pub current_fee_bps: u32,
+    pub period_seconds: u64, // how often to recalculate (default: 3600 = 1 hour)
+}
+
+impl DynamicFeeState {
+    fn new() -> Self {
+        Self {
+            min_fee_bps: 5,    // 0.05%
+            max_fee_bps: 30,   // 0.30%
+            current_fee_bps: 5, // start at minimum
+            period_seconds: 3600, // 1 hour recalculation period
+        }
+    }
 }
 
 impl CorridorFeePool {
