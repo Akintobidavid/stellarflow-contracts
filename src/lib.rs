@@ -693,8 +693,35 @@ impl TimeLockedUpgradeContract {
         Ok(pool)
     }
 
-    pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> fees::CorridorFeePool {
-        fees::get_corridor_fee_pool(env, asset)
+    pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
+        crate::fees::get_corridor_fee_pool(env, asset)
+    }
+
+    /// Get the current dynamic trading fee for an asset (in basis points)
+    pub fn get_current_dynamic_fee(env: Env, asset: AssetId) -> u32 {
+        crate::fees::get_current_dynamic_fee(&env, asset)
+    }
+
+    /// Admin function to configure dynamic fee parameters
+    pub fn set_dynamic_fee_config(
+        env: Env,
+        caller: Address,
+        asset: AssetId,
+        min_fee_bps: u32,
+        max_fee_bps: u32,
+        period_seconds: u64,
+    ) -> Result<(), ContractError> {
+        crate::fees::set_dynamic_fee_config(&env, &caller, asset, min_fee_bps, max_fee_bps, period_seconds)
+    }
+
+    /// Update volume history and get the current dynamic fee (called internally during swaps)
+    pub(crate) fn update_volume_and_get_fee(env: &Env, asset: AssetId, trade_volume: u64) -> Result<u32, ContractError> {
+        crate::fees::update_volume_and_adjust_fee(env, asset, trade_volume)
+    }
+
+    /// Calculate and deduct the dynamic fee from a trade amount
+    pub(crate) fn calculate_and_deduct_fee(amount: u128, fee_bps: u32) -> Result<(u128, u128), ContractError> {
+        crate::fees::calculate_and_deduct_fee(amount, fee_bps)
     }
 
     pub fn set_corridor_weight(
