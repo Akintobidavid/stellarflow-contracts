@@ -358,7 +358,7 @@ pub fn simulate_route(env: &Env, route: &Route, slippage_tolerance_bps: u32) -> 
     validate_route(env, route)?;
 
     if slippage_tolerance_bps > 10000 {
-        return Err(ContractError::InvalidSlippageTolerance);
+        return Err(ContractError::InvalidArgument);
     }
 
     let mut running_amount: u64 = 0;
