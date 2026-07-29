@@ -95,8 +95,10 @@ pub mod upgrades;
 pub mod validation;
 use crate::governance::{
     verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot,
-    verify_upgrade_quorum, GovernanceUpgradeProposal,
+    verify_upgrade_quorum, GovernanceUpgradeProposal, GovernanceUpgradeProposedEvent,
+    calculate_collected_weight, get_multisig_config, GOVERNANCE_UPGRADE_KEY,
 };
+use crate::events::events::{emit_simple2, EV_UPGRADE_PROPOSED};
 use crate::validation::{check_bond_capacity, validate_telemetry_submission};
 
 use crate::governance::{
@@ -434,17 +436,51 @@ impl TimeLockedUpgradeContract {
 
     pub fn propose_upgrade(
         env: Env, new_wasm_hash: BytesN<32>, proposer: Address,
+        signers: Vec<Address>,
         nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64,
     ) -> Result<(), ContractError> {
-    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         crate::staging::check_staging_access(&env, &proposer)?;
         let data = Self::_load_data(&env)?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
         consume_nonce(&env, &proposer, nonce, salt, salt_signature)?;
-        let staged = StagedUpgrade { new_wasm_hash, proposer, staged_at: env.ledger().timestamp() };
+
+        // Verify multi-sig quorum threshold
+        let collected_weight = calculate_collected_weight(&env, &signers, &data)?;
+        let multisig_config = get_multisig_config(&env);
+        if collected_weight < multisig_config.required_weight {
+            return Err(ContractError::ThresholdNotReached);
+        }
+
+        let staged_at = env.ledger().timestamp();
+        let proposal = GovernanceUpgradeProposal {
+            new_wasm_hash,
+            proposer: proposer.clone(),
+            staged_at,
+            signers: signers.clone(),
+        };
+        env.storage().instance().set(&GOVERNANCE_UPGRADE_KEY, &proposal);
+
+        let staged = StagedUpgrade { new_wasm_hash, proposer: proposer.clone(), staged_at };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
+
+        // Emit GovernanceUpgradeProposed event
+        let _ = emit_simple2(
+            &env,
+            EV_UPGRADE_PROPOSED,
+            symbol_short!("governance"),
+            GovernanceUpgradeProposedEvent {
+                new_wasm_hash,
+                proposer: proposer.clone(),
+                signers,
+                staged_at,
+                required_weight: multisig_config.required_weight,
+                collected_weight,
+            },
+        );
+
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 

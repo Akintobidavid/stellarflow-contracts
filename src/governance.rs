@@ -28,7 +28,7 @@ pub struct MultiSigConfig {
 impl Default for MultiSigConfig {
     fn default() -> Self {
         Self {
-            required_weight: 3,
+            required_weight: 1,
             max_signer_weight: 1,
         }
     }
@@ -92,19 +92,18 @@ pub fn set_governance_config(env: &Env, config: &GovernanceConfig) {
 }
 
 pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
-    let config = get_governance_config(env);
     let data: ContractData = env
         .storage()
         .instance()
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
+
     let authorized_signers: Map<Address, ()> = env
         .storage()
         .instance()
         .get(&SIGNERS_KEY)
         .unwrap_or_else(|| Map::new(env));
 
-    // Check both legacy count-based and new weight-based quorum
     let config = get_governance_config(env);
     let multisig_config = get_multisig_config(env);
     
