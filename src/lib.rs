@@ -88,7 +88,10 @@ pub mod amm;
 pub mod events;
 pub mod router;
 pub mod settlement;
+pub mod bridge;
 pub mod storage;
+pub mod vaults;
+pub mod zk;
 pub mod temp_governance;
 pub mod security;
 pub mod upgrades;
@@ -201,8 +204,7 @@ pub enum ContractError {
     InsufficientBondForPenalty = 46,
     /// The final swap output is below the caller's minimum acceptable amount.
     SlippageExceeded = 47,
-    /// Invalid input parameter provided to a function.
-    InvalidInput = 48,
+    NullifierAlreadyUsed = 48,
 }
 
 // Contract state keys

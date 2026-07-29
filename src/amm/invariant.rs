@@ -23,9 +23,9 @@ impl U256 {
         let cross2 = (a_lo as u128) * (b_hi as u128);
         let hi = (a_hi as u128) * (b_hi as u128);
 
-        let mid = cross1 + cross2;
+        let (mid, carry_mid) = cross1.overflowing_add(cross2);
         let mid_lo = mid << 64;
-        let mid_hi = mid >> 64;
+        let mid_hi = (mid >> 64) + (carry_mid as u128);
 
         let (lo, carry1) = lo.overflowing_add(mid_lo);
         let hi = hi + mid_hi + (carry1 as u128);
