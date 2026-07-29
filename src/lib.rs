@@ -201,6 +201,9 @@ pub enum ContractError {
     InsufficientBondForPenalty = 46,
     /// The final swap output is below the caller's minimum acceptable amount.
     SlippageExceeded = 47,
+    /// Incoming deposit or swap amount is below the minimum transfer threshold.
+    /// Rejects dust / micro-denomination spam to preserve ledger throughput.
+    AmountTooLow = 48,
 }
 
 // Contract state keys
