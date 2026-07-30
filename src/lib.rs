@@ -1468,6 +1468,28 @@ impl TimeLockedUpgradeContract {
 
         Ok(())
     }
+
+    // ── Issue #592: Batch Purge of Abandoned Zero-Balance Keys ───────────────
+
+    /// Batch-evict abandoned zero-balance persistent storage keys to reclaim
+    /// ledger footprint consumed by exited liquidity positions.
+    ///
+    /// Requires multi-sig quorum (≥ 2 registered signers). Each signer in
+    /// `signers` must have already called `require_auth` on the transaction.
+    ///
+    /// Returns the number of entries actually removed.
+    pub fn cleanup_zero_balances(
+        env: Env,
+        signers: Vec<Address>,
+        targets: Vec<admin::cleanup::CleanupTarget>,
+    ) -> Result<u32, ContractError> {
+        // Require auth from every co-signing address so the host logs them
+        // as authorised participants of this call.
+        for signer in signers.iter() {
+            signer.require_auth();
+        }
+        admin::cleanup::cleanup_zero_balances(&env, &signers, &targets)
+    }
 }
 
 } // end impl TimeLockedUpgradeContract
