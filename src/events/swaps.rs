@@ -4,6 +4,7 @@ use soroban_sdk::{contracttype, Address, Env, Symbol};
 ///
 /// Emitted on pool trade execution to provide real-time market telemetry
 /// for off-chain indexers.
+/// 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwapExecutedEvent {
