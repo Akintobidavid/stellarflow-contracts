@@ -207,6 +207,7 @@ pub enum ContractError {
     /// The final swap output is below the caller's minimum acceptable amount.
     SlippageExceeded = 47,
     NullifierAlreadyUsed = 48,
+    InvalidProof = 49,
 }
 
 // Contract state keys
@@ -620,14 +621,6 @@ impl TimeLockedUpgradeContract {
         let asset_id = symbol_to_asset_id(&asset);
         let heartbeat_key = HeartbeatKey(asset_id);
         env.storage().temporary().get(&heartbeat_key)
-    pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
-        let _ = ensure_schema_version(&env);
-        let timestamps: Map<AssetId, u64> = env
-            .storage()
-            .temporary()
-            .get(&HEARTBEAT_KEY)
-            .unwrap_or_else(|| Map::new(&env));
-        timestamps.get(asset)
     }
 
     pub fn get_heartbeat_interval(env: Env) -> u64 {
@@ -675,8 +668,6 @@ impl TimeLockedUpgradeContract {
     pub fn is_data_fresh(env: Env, asset: AssetId) -> bool {
         let heartbeat_key = HeartbeatKey(asset);
         if let Some(last_update) = env.storage().temporary().get::<_, u64>(&heartbeat_key) {
-        let timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
-        if let Some(last_update) = timestamps.get(asset) {
             env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)
         } else {
             false
@@ -1175,6 +1166,7 @@ impl TimeLockedUpgradeContract {
     ),
 )?;
         Ok(result)
+    }
        
     pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
         admin::assert_not_revoked(&env, &node)?;
