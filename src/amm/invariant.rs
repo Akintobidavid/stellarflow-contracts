@@ -23,9 +23,9 @@ impl U256 {
         let cross2 = (a_lo as u128) * (b_hi as u128);
         let hi = (a_hi as u128) * (b_hi as u128);
 
-        let mid = cross1 + cross2;
+        let (mid, carry_mid) = cross1.overflowing_add(cross2);
         let mid_lo = mid << 64;
-        let mid_hi = mid >> 64;
+        let mid_hi = (mid >> 64) + (carry_mid as u128);
 
         let (lo, carry1) = lo.overflowing_add(mid_lo);
         let hi = hi + mid_hi + (carry1 as u128);
@@ -74,24 +74,41 @@ fn mul_div(numerator: u128, denominator: u128, divisor: u128) -> Result<u128, Co
     Ok(quot)
 }
 
-/// Compute the output amount for a constant-product swap.
+/// Compute the output amount for a constant-product swap with dynamic fee deduction.
 ///
-/// Formula: `out = reserve_out * amount_in / (reserve_in + amount_in)`
-///
-/// The result is rounded down (floor division) so that the pool never loses
-/// value — the invariant `k` is guaranteed to be non-decreasing.
+/// First calculates the raw output, then applies the dynamic fee to get the final amount
+/// sent to the trader. Fees are accumulated in the pool to benefit liquidity providers.
 pub fn compute_swap_out(
+    env: &crate::Env,
+    asset: crate::AssetId,
     amount_in: u128,
     reserve_in: u128,
     reserve_out: u128,
-) -> Result<u128, ContractError> {
+) -> Result<(u128, u128), ContractError> {
     if amount_in == 0 || reserve_in == 0 || reserve_out == 0 {
         return Err(ContractError::InvalidInput);
     }
+    
+    // Update volume history and get current dynamic fee
+    let fee_bps = crate::TimeLockedUpgradeContract::update_volume_and_get_fee(
+        env, 
+        asset, 
+        amount_in as u64
+    )?;
+    
+    // Calculate raw output before fees
     let denominator = reserve_in
         .checked_add(amount_in)
         .ok_or(ContractError::Overflow)?;
-    mul_div(reserve_out, amount_in, denominator)
+    let raw_output = mul_div(reserve_out, amount_in, denominator)?;
+    
+    // Apply dynamic fee deduction
+    let (amount_after_fees, fee_amount) = crate::TimeLockedUpgradeContract::calculate_and_deduct_fee(
+        raw_output, 
+        fee_bps
+    )?;
+    
+    Ok((amount_after_fees, fee_amount))
 }
 
 /// Compute the amount of LP shares to mint for a liquidity deposit.

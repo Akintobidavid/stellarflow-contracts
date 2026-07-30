@@ -328,7 +328,9 @@ fn test_upgrade_propose_and_get_pending() {
     let (env, client, admin) = setup_env();
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
     let (salt, sig) = nonce_proof(&env, 0, b"upgrade-test");
-    client.propose_upgrade(&wasm_hash, &admin, &0, &salt, &sig, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&wasm_hash, &admin, &signers, &0, &salt, &sig, &u64::MAX);
     let pending = client.get_pending_upgrade();
     assert!(pending.is_some());
 }
@@ -338,7 +340,9 @@ fn test_upgrade_cancel() {
     let (env, client, admin) = setup_env();
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
     let (salt, sig) = nonce_proof(&env, 0, b"upgrade-test");
-    client.propose_upgrade(&wasm_hash, &admin, &0, &salt, &sig, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&wasm_hash, &admin, &signers, &0, &salt, &sig, &u64::MAX);
     client.cancel_upgrade(&admin);
     let pending = client.get_pending_upgrade();
     assert!(pending.is_none());
@@ -349,7 +353,9 @@ fn test_upgrade_timelock_remaining() {
     let (env, client, admin) = setup_env();
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
     let (salt, sig) = nonce_proof(&env, 0, b"upgrade-test");
-    client.propose_upgrade(&wasm_hash, &admin, &0, &salt, &sig, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&wasm_hash, &admin, &signers, &0, &salt, &sig, &u64::MAX);
     let remaining = client.get_upgrade_timelock_remaining();
     assert!(remaining.is_some());
 }
