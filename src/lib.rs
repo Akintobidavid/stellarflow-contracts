@@ -88,15 +88,20 @@ pub mod amm;
 pub mod events;
 pub mod router;
 pub mod settlement;
+pub mod bridge;
 pub mod storage;
+pub mod vaults;
+pub mod zk;
 pub mod temp_governance;
 pub mod security;
 pub mod upgrades;
 pub mod validation;
 use crate::governance::{
     verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot,
-    verify_upgrade_quorum, GovernanceUpgradeProposal,
+    verify_upgrade_quorum, GovernanceUpgradeProposal, GovernanceUpgradeProposedEvent,
+    calculate_collected_weight, get_multisig_config, GOVERNANCE_UPGRADE_KEY,
 };
+use crate::events::events::{emit_simple2, EV_UPGRADE_PROPOSED};
 use crate::validation::{check_bond_capacity, validate_telemetry_submission};
 
 use crate::governance::{
@@ -201,6 +206,7 @@ pub enum ContractError {
     InsufficientBondForPenalty = 46,
     /// The final swap output is below the caller's minimum acceptable amount.
     SlippageExceeded = 47,
+    NullifierAlreadyUsed = 48,
 }
 
 // Contract state keys
@@ -434,17 +440,51 @@ impl TimeLockedUpgradeContract {
 
     pub fn propose_upgrade(
         env: Env, new_wasm_hash: BytesN<32>, proposer: Address,
+        signers: Vec<Address>,
         nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64,
     ) -> Result<(), ContractError> {
-    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         crate::staging::check_staging_access(&env, &proposer)?;
         let data = Self::_load_data(&env)?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
         consume_nonce(&env, &proposer, nonce, salt, salt_signature)?;
-        let staged = StagedUpgrade { new_wasm_hash, proposer, staged_at: env.ledger().timestamp() };
+
+        // Verify multi-sig quorum threshold
+        let collected_weight = calculate_collected_weight(&env, &signers, &data)?;
+        let multisig_config = get_multisig_config(&env);
+        if collected_weight < multisig_config.required_weight {
+            return Err(ContractError::ThresholdNotReached);
+        }
+
+        let staged_at = env.ledger().timestamp();
+        let proposal = GovernanceUpgradeProposal {
+            new_wasm_hash,
+            proposer: proposer.clone(),
+            staged_at,
+            signers: signers.clone(),
+        };
+        env.storage().instance().set(&GOVERNANCE_UPGRADE_KEY, &proposal);
+
+        let staged = StagedUpgrade { new_wasm_hash, proposer: proposer.clone(), staged_at };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
+
+        // Emit GovernanceUpgradeProposed event
+        let _ = emit_simple2(
+            &env,
+            EV_UPGRADE_PROPOSED,
+            symbol_short!("governance"),
+            GovernanceUpgradeProposedEvent {
+                new_wasm_hash,
+                proposer: proposer.clone(),
+                signers,
+                staged_at,
+                required_weight: multisig_config.required_weight,
+                collected_weight,
+            },
+        );
+
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -689,8 +729,35 @@ impl TimeLockedUpgradeContract {
         Ok(pool)
     }
 
-    pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> fees::CorridorFeePool {
-        fees::get_corridor_fee_pool(env, asset)
+    pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
+        crate::fees::get_corridor_fee_pool(env, asset)
+    }
+
+    /// Get the current dynamic trading fee for an asset (in basis points)
+    pub fn get_current_dynamic_fee(env: Env, asset: AssetId) -> u32 {
+        crate::fees::get_current_dynamic_fee(&env, asset)
+    }
+
+    /// Admin function to configure dynamic fee parameters
+    pub fn set_dynamic_fee_config(
+        env: Env,
+        caller: Address,
+        asset: AssetId,
+        min_fee_bps: u32,
+        max_fee_bps: u32,
+        period_seconds: u64,
+    ) -> Result<(), ContractError> {
+        crate::fees::set_dynamic_fee_config(&env, &caller, asset, min_fee_bps, max_fee_bps, period_seconds)
+    }
+
+    /// Update volume history and get the current dynamic fee (called internally during swaps)
+    pub(crate) fn update_volume_and_get_fee(env: &Env, asset: AssetId, trade_volume: u64) -> Result<u32, ContractError> {
+        crate::fees::update_volume_and_adjust_fee(env, asset, trade_volume)
+    }
+
+    /// Calculate and deduct the dynamic fee from a trade amount
+    pub(crate) fn calculate_and_deduct_fee(amount: u128, fee_bps: u32) -> Result<(u128, u128), ContractError> {
+        crate::fees::calculate_and_deduct_fee(amount, fee_bps)
     }
 
     pub fn set_corridor_weight(

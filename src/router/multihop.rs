@@ -333,12 +333,72 @@ pub fn get_active_snapshot(env: &Env) -> Option<RouteSnapshot> {
     env.storage().temporary().get(&ROUTE_EXEC_KEY)
 }
 
-/// Estimate the output of a route without executing it. Useful for quoting.
-pub fn estimate_route(env: &Env, route: &Route) -> Result<u64, ContractError> {
+/// Simulated swap outcome containing all computed details for frontends.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SimulatedSwapOutcome {
+    /// The final output amount the user would receive.
+    pub final_amount_out: u64,
+    /// Per-hop detailed results including path and fee breakdowns.
+    pub hop_details: Vec<HopResult>,
+    /// Total fees collected across all hops.
+    pub total_fees: u64,
+    /// The price impact percentage (0-10000, 100 = 1%) of the swap.
+    pub price_impact_bps: u128,
+    /// The minimum output required to not exceed the user's slippage tolerance.
+    pub min_amount_out_with_slippage: u64,
+    /// Estimated gas units consumed by this swap if executed on-chain.
+    pub estimated_gas_units: u64,
+}
+
+/// Simulate a full multi-hop swap route without any storage mutations.
+/// Returns complete outcome details including output amounts, fees, path details,
+/// slippage checks, and gas estimates for frontends to display to users.
+pub fn simulate_route(env: &Env, route: &Route, slippage_tolerance_bps: u32) -> Result<SimulatedSwapOutcome, ContractError> {
     validate_route(env, route)?;
 
-    let mut running_amount: u64 = 0;
+    if slippage_tolerance_bps > 10000 {
+        return Err(ContractError::InvalidArgument);
+    }
 
+    let mut running_amount: u64 = 0;
+    let mut hop_results: Vec<HopResult> = Vec::new(env);
+    let mut total_fees: u64 = 0;
+    let mut initial_total_output: u64 = 0;
+
+    // First pass: calculate what output would be with zero price impact (ideal case)
+    for i in 0..route.steps.len() {
+        let step = route
+            .steps
+            .get(i)
+            .ok_or(ContractError::RouteExecutionFailed)?;
+        let amount_in = if i == 0 {
+            step.amount_in
+        } else {
+            initial_total_output
+        };
+
+        let pool = fees::get_corridor_fee_pool(env.clone(), step.asset_in);
+        if pool.asset != step.asset_in {
+            return Err(ContractError::PoolNotFound);
+        }
+
+        // Ideal case: if adding our amount didn't change the reserve ratio
+        let ideal_out = if pool.collected > 0 {
+            ((amount_in as u128) * (pool.variable_pool as u128) / (pool.collected as u128)) as u64
+        } else {
+            amount_in // edge case for new pool
+        };
+
+        let fee = (ideal_out as u128)
+            .checked_mul(30)
+            .ok_or(ContractError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(ContractError::DivisionByZero)? as u64;
+        initial_total_output = ideal_out.checked_sub(fee).ok_or(ContractError::Overflow)?;
+    }
+
+    // Second pass: execute the same calculations as execute_route but without storage writes
     for i in 0..route.steps.len() {
         let step = route
             .steps
@@ -368,18 +428,61 @@ pub fn estimate_route(env: &Env, route: &Route) -> Result<u64, ContractError> {
             .ok_or(ContractError::DivisionByZero)?;
         let amount_out = raw_out.min(u64::MAX as u128) as u64;
 
-        // Apply 0.3% fee.
-        let fee = (amount_out as u128)
+        // Apply 0.3% fee (same as execute_single_hop)
+        let fee_collected = (amount_out as u128)
             .checked_mul(30)
             .ok_or(ContractError::Overflow)?
             .checked_div(10_000)
-            .ok_or(ContractError::DivisionByZero)?;
-        running_amount = amount_out
-            .checked_sub(fee)
-            .ok_or(ContractError::Overflow)? as u64;
+            .ok_or(ContractError::DivisionByZero)? as u64;
+        let net_out = amount_out
+            .checked_sub(fee_collected)
+            .ok_or(ContractError::Overflow)?;
+
+        running_amount = net_out;
+        total_fees = total_fees
+            .checked_add(fee_collected)
+            .ok_or(ContractError::Overflow)?;
+
+        hop_results.push_back(HopResult {
+            hop_index: i as u32,
+            amount_out: net_out,
+            fee_collected,
+        });
     }
 
-    Ok(running_amount)
+    // Calculate price impact: ((ideal - actual) / ideal) * 10000 bps
+    let price_impact_bps = if initial_total_output > 0 {
+        ((initial_total_output as u128 - running_amount as u128) * 10000) / initial_total_output as u128
+    } else {
+        0
+    };
+
+    // Calculate minimum output with user's slippage tolerance
+    let min_amount_out_with_slippage = (running_amount as u128)
+        .checked_mul((10000 - slippage_tolerance_bps as u128))
+        .ok_or(ContractError::Overflow)?
+        .checked_div(10000)
+        .ok_or(ContractError::DivisionByZero)? as u64;
+
+    // Estimate gas: base gas + per-hop gas cost (gas-optimized calculation)
+    const BASE_GAS: u64 = 100000;
+    const PER_HOP_GAS: u64 = 50000;
+    let estimated_gas_units = BASE_GAS + (route.steps.len() as u64 * PER_HOP_GAS);
+
+    Ok(SimulatedSwapOutcome {
+        final_amount_out: running_amount,
+        hop_details: hop_results,
+        total_fees,
+        price_impact_bps,
+        min_amount_out_with_slippage,
+        estimated_gas_units,
+    })
+}
+
+/// Estimate the output of a route without executing it. Useful for quoting.
+pub fn estimate_route(env: &Env, route: &Route) -> Result<u64, ContractError> {
+    let simulation = simulate_route(env, route, 0)?;
+    Ok(simulation.final_amount_out)
 }
 
 // ---------------------------------------------------------------------------

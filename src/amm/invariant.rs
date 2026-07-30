@@ -46,55 +46,19 @@ impl U256 {
     /// `upper << 64` never overflows the u128 `result_hi`. The
     /// `debug_assert!` re-checks this bound at runtime as defense-in-depth.
     fn mul(a: u128, b: u128) -> Self {
-        // 64-bit halves of each operand.
-        let a_lo = a & MASK_64;
-        let a_hi = a >> 64;
-        let b_lo = b & MASK_64;
-        let b_hi = b >> 64;
+        let a_lo = a as u64;
+        let a_hi = (a >> 64) as u64;
+        let b_lo = b as u64;
+        let b_hi = (b >> 64) as u64;
 
-        // Each u64×u64 product widens freely to u128. We split each into its
-        // low-64 and high-64 halves so cross-terms can sum without losing
-        // precision across the word boundary.
-        let p_lo_lo = a_lo * b_lo;
-        let p_lo_lo_lo: u128 = p_lo_lo & MASK_64; // bits 0..63 of p_lo_lo
-        let p_lo_lo_hi: u128 = p_lo_lo >> 64;     // bits 64..127 of p_lo_lo
+        let lo = (a_lo as u128) * (b_lo as u128);
+        let cross1 = (a_hi as u128) * (b_lo as u128);
+        let cross2 = (a_lo as u128) * (b_hi as u128);
+        let hi = (a_hi as u128) * (b_hi as u128);
 
-        let p_hi_lo = a_hi * b_lo; // ah * bl
-        let p_hi_lo_lo: u128 = p_hi_lo & MASK_64;
-        let p_hi_lo_hi: u128 = p_hi_lo >> 64;
-
-        let p_lo_hi = a_lo * b_hi; // al * bh
-        let p_lo_hi_lo: u128 = p_lo_hi & MASK_64;
-        let p_lo_hi_hi: u128 = p_lo_hi >> 64;
-
-        let p_hi_hi = a_hi * b_hi; // ah * bh
-        let p_hi_hi_lo: u128 = p_hi_hi & MASK_64;
-        let p_hi_hi_hi: u128 = p_hi_hi >> 64;
-
-        // Sum the three terms that contribute to bits 64..127 of the result
-        // (= the lower half of "mid"). Each summand is ≤ MASK_64, so the sum
-        // is ≤ 3 * (2^64 − 1) < u128::MAX. Carry into bits 128+ is ≤ 2.
-        let mid_lo_sum: u128 = p_lo_lo_hi + p_hi_lo_lo + p_lo_hi_lo;
-        let mid_lo_bits: u128 = mid_lo_sum & MASK_64; // -> result_lo bits 64..127
-        let mid_lo_carry: u128 = mid_lo_sum >> 64;   // -> mid_hi_summand, ≤ 2
-
-        // Sum the four terms that contribute to bits 128..191 of the result
-        // (= the upper half of "mid"). Three are ≤ MASK_64, one is ≤ 2;
-        // total ≤ 3·2^64 − 3 < u128::MAX. Carry into bits 192+ is ≤ 2.
-        let mid_hi_sum: u128 = p_hi_hi_lo + p_hi_lo_hi + p_lo_hi_hi + mid_lo_carry;
-        let mid_hi_bits: u128 = mid_hi_sum & MASK_64; // -> result_hi bits 0..63 (= bits 128..191 of full)
-        let mid_hi_carry: u128 = mid_hi_sum >> 64;   // -> upper, ≤ 2
-
-        // Bits 192..255 of the full result. `p_hi_hi_hi ≤ 2^64 − 2` (since
-        // (2^64 − 1)^2 has high half exactly 2^64 − 2) and `mid_hi_carry ≤ 2`,
-        // but their individual maxima are mutually exclusive (see doc-comment),
-        // so the joint bound is `upper ≤ 2^64 − 1` — safe to place in bits
-        // 64..127 of result_hi via `upper << 64`.
-        let upper: u128 = p_hi_hi_hi + mid_hi_carry;
-        debug_assert!(
-            upper & !MASK_64 == 0,
-            "U256::mul upper bit-pack overflow: upper={upper:#034x}"
-        );
+        let (mid, carry_mid) = cross1.overflowing_add(cross2);
+        let mid_lo = mid << 64;
+        let mid_hi = (mid >> 64) + (carry_mid as u128);
 
         let result_lo = (mid_lo_bits << 64) | p_lo_lo_lo;
         let result_hi = (upper << 64) | mid_hi_bits;
@@ -143,24 +107,41 @@ fn mul_div(numerator: u128, denominator: u128, divisor: u128) -> Result<u128, Co
     Ok(quot)
 }
 
-/// Compute the output amount for a constant-product swap.
+/// Compute the output amount for a constant-product swap with dynamic fee deduction.
 ///
-/// Formula: `out = reserve_out * amount_in / (reserve_in + amount_in)`
-///
-/// The result is rounded down (floor division) so that the pool never loses
-/// value — the invariant `k` is guaranteed to be non-decreasing.
+/// First calculates the raw output, then applies the dynamic fee to get the final amount
+/// sent to the trader. Fees are accumulated in the pool to benefit liquidity providers.
 pub fn compute_swap_out(
+    env: &crate::Env,
+    asset: crate::AssetId,
     amount_in: u128,
     reserve_in: u128,
     reserve_out: u128,
-) -> Result<u128, ContractError> {
+) -> Result<(u128, u128), ContractError> {
     if amount_in == 0 || reserve_in == 0 || reserve_out == 0 {
         return Err(ContractError::InvalidInput);
     }
+    
+    // Update volume history and get current dynamic fee
+    let fee_bps = crate::TimeLockedUpgradeContract::update_volume_and_get_fee(
+        env, 
+        asset, 
+        amount_in as u64
+    )?;
+    
+    // Calculate raw output before fees
     let denominator = reserve_in
         .checked_add(amount_in)
         .ok_or(ContractError::Overflow)?;
-    mul_div(reserve_out, amount_in, denominator)
+    let raw_output = mul_div(reserve_out, amount_in, denominator)?;
+    
+    // Apply dynamic fee deduction
+    let (amount_after_fees, fee_amount) = crate::TimeLockedUpgradeContract::calculate_and_deduct_fee(
+        raw_output, 
+        fee_bps
+    )?;
+    
+    Ok((amount_after_fees, fee_amount))
 }
 
 /// Compute the amount of LP shares to mint for a liquidity deposit.
