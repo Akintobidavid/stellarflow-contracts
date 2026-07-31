@@ -19,7 +19,7 @@
 //! cleans it up on success. If the transaction fails (any hop returns an
 //! error), Soroban's atomicity guarantees the snapshot is also reverted.
 
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Vec};
 
 use crate::events::{emit_simple2, EV_ROUTE_OK};
 use crate::fees::{self, CorridorFeePool};
@@ -28,10 +28,6 @@ use crate::{AssetId, ContractError};
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
-
-/// Temporary storage key for the active route execution context.
-/// Cleared on success; automatically reverted by the ledger on failure.
-const ROUTE_EXEC_KEY: Symbol = symbol_short!("RTEXEC");
 
 /// Maximum number of hops allowed in a single route to bound compute.
 const MAX_ROUTE_HOPS: u32 = 8;
@@ -100,6 +96,17 @@ pub struct RouteSnapshot {
     pub sender: Address,
     pub total_steps: u32,
     pub started_at: u64,
+}
+
+/// Scratch state for a route. It is kept in temporary storage so it is
+/// automatically rent-cleaned; balances and fee pools are never stored here.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteComputationState {
+    pub snapshot: RouteSnapshot,
+    pub running_amount: u64,
+    pub total_fees: u64,
+    pub hop_results: Vec<HopResult>,
 }
 
 // ---------------------------------------------------------------------------
@@ -182,13 +189,18 @@ pub fn execute_route(env: &Env, route: &Route) -> Result<RouteResult, ContractEr
         total_steps: route.steps.len(),
         started_at: env.ledger().timestamp(),
     };
-    env.storage().temporary().set(&ROUTE_EXEC_KEY, &snapshot);
+    let route_key = crate::storage::ephemeral::EphemeralStorageKey::ActiveRoute;
+    env.storage().temporary().set(
+        &route_key,
+        &RouteComputationState {
+            snapshot,
+            running_amount: 0,
+            total_fees: 0,
+            hop_results: Vec::new(env),
+        },
+    );
 
     // ── Phase 3: Sequential hop execution ────────────────────────────────
-    let mut running_amount: u64 = 0;
-    let mut hop_results: Vec<HopResult> = Vec::new(env);
-    let mut total_fees: u64 = 0;
-
     for i in 0..route.steps.len() {
         let step = route
             .steps
@@ -200,7 +212,11 @@ pub fn execute_route(env: &Env, route: &Route) -> Result<RouteResult, ContractEr
         let amount_in = if i == 0 {
             step.amount_in
         } else {
-            running_amount
+            env.storage()
+                .temporary()
+                .get::<_, RouteComputationState>(&route_key)
+                .ok_or(ContractError::RouteExecutionFailed)?
+                .running_amount
         };
 
         // Execute the single-hop swap against the pool contract.
@@ -210,33 +226,44 @@ pub fn execute_route(env: &Env, route: &Route) -> Result<RouteResult, ContractEr
         if hop_result.amount_out < step.min_amount_out {
             // Explicitly remove snapshot before returning error to keep
             // temporary storage clean even on the happy-path exit.
-            env.storage().temporary().remove(&ROUTE_EXEC_KEY);
+            env.storage().temporary().remove(&route_key);
             return Err(ContractError::SlippageExceeded);
         }
 
-        running_amount = hop_result.amount_out;
-        total_fees = total_fees
+        let mut state: RouteComputationState = env
+            .storage()
+            .temporary()
+            .get(&route_key)
+            .ok_or(ContractError::RouteExecutionFailed)?;
+        state.running_amount = hop_result.amount_out;
+        state.total_fees = state
+            .total_fees
             .checked_add(hop_result.fee_collected)
             .ok_or(ContractError::Overflow)?;
-
-        hop_results.push_back(hop_result);
+        state.hop_results.push_back(hop_result);
+        env.storage().temporary().set(&route_key, &state);
     }
 
     // ── Phase 4: Finalize — clean up snapshot ───────────────────────────
-    env.storage().temporary().remove(&ROUTE_EXEC_KEY);
+    let state: RouteComputationState = env
+        .storage()
+        .temporary()
+        .get(&route_key)
+        .ok_or(ContractError::RouteExecutionFailed)?;
+    env.storage().temporary().remove(&route_key);
 
     // Emit a settlement event for off-chain indexers.
     let _ = emit_simple2(
         &env,
         EV_ROUTE_OK,
         symbol_short!("route"),
-        (sender.clone(), running_amount, route.steps.len()),
+        (sender.clone(), state.running_amount, route.steps.len()),
     );
 
     Ok(RouteResult {
-        final_amount_out: running_amount,
-        hop_results,
-        total_fees,
+        final_amount_out: state.running_amount,
+        hop_results: state.hop_results,
+        total_fees: state.total_fees,
     })
 }
 
@@ -316,6 +343,8 @@ fn execute_single_hop(
         .variable_pool
         .checked_add(fee_collected as u64)
         .ok_or(ContractError::Overflow)?;
+    // Durable accounting is kept outside the transient route buffer. In the
+    // full pool integration this is also where token balances/reserves live.
     env.storage()
         .instance()
         .set(&fees::FeesStorageKey::CorridorPool(step.asset_in), &pool);
@@ -333,7 +362,12 @@ fn execute_single_hop(
 
 /// Return the currently executing route snapshot, if any.
 pub fn get_active_snapshot(env: &Env) -> Option<RouteSnapshot> {
-    env.storage().temporary().get(&ROUTE_EXEC_KEY)
+    env.storage()
+        .temporary()
+        .get::<_, RouteComputationState>(
+            &crate::storage::ephemeral::EphemeralStorageKey::ActiveRoute,
+        )
+        .map(|state| state.snapshot)
 }
 
 /// Simulated swap outcome containing all computed details for frontends.
@@ -505,10 +539,7 @@ mod tests {
             sender,
             steps: Vec::new(&env),
         };
-        assert_eq!(
-            validate_route(&env, &route),
-            Err(ContractError::EmptyRoute)
-        );
+        assert_eq!(validate_route(&env, &route), Err(ContractError::EmptyRoute));
     }
 
     #[test]
@@ -590,10 +621,7 @@ mod tests {
             sender,
             steps: Vec::new(&env),
         };
-        assert_eq!(
-            estimate_route(&env, &route),
-            Err(ContractError::EmptyRoute)
-        );
+        assert_eq!(estimate_route(&env, &route), Err(ContractError::EmptyRoute));
     }
 
     #[test]

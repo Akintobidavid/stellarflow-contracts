@@ -4,8 +4,12 @@
 //! replacing dynamic Map structures with fixed-size tuple keys for gas efficiency.
 //! It also provides helper functions for node profile management, subscription
 //! rent extension, and asset price TTL management.
-use soroban_sdk::{contracttype, Address, Env, Symbol, Map};
 use crate::NodeProfile;
+use soroban_sdk::{contracttype, Address, Env, Map, Symbol};
+
+/// Helpers and keys for short-lived calculation state.
+#[path = "storage/ephemeral.rs"]
+pub(crate) mod ephemeral;
 
 /// Fixed-size tuple-based storage keys for gas-optimized lookups.
 /// Replaces dynamic Map structures with direct tuple keys.
@@ -196,7 +200,9 @@ pub fn check_and_prune_feed_stake(env: &Env, node: Address, asset: u32) -> bool 
         } else {
             stakes.set(node.clone(), new_node_total);
         }
-        env.storage().instance().set(&crate::STAKE_REGISTRY_KEY, &stakes);
+        env.storage()
+            .instance()
+            .set(&crate::STAKE_REGISTRY_KEY, &stakes);
 
         let total: u64 = env
             .storage()
@@ -204,7 +210,9 @@ pub fn check_and_prune_feed_stake(env: &Env, node: Address, asset: u32) -> bool 
             .get(&crate::TOTAL_STAKED_KEY)
             .unwrap_or(0u64);
         let new_total = total.saturating_sub(val.amount);
-        env.storage().instance().set(&crate::TOTAL_STAKED_KEY, &new_total);
+        env.storage()
+            .instance()
+            .set(&crate::TOTAL_STAKED_KEY, &new_total);
 
         true
     } else {
@@ -220,8 +228,8 @@ pub fn update_feed_stake_activity(env: &Env, node: Address, asset: u32) {
     if let Some(mut val) = env.storage().persistent().get::<_, FeedStakeValue>(&key) {
         val.last_active = env.ledger().timestamp();
         env.storage().persistent().set(&key, &val);
-        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
     }
 }
-
-

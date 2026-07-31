@@ -2,7 +2,9 @@
 
 use price_oracle::{ContractError as OracleError, PriceOracle, PriceOracleClient};
 use soroban_sdk::{symbol_short, vec, Env, Symbol};
-use stellarflow_benchmarks::profile::{assert_swap_path_within_limits, measure_entrypoint, EntrypointUsage};
+use stellarflow_benchmarks::profile::{
+    assert_swap_path_within_limits, measure_entrypoint, EntrypointUsage,
+};
 
 const PRICE_DECIMALS: u32 = 9;
 const PRICE_TTL_LEDGERS: u64 = 3_600;
@@ -13,7 +15,12 @@ fn setup_oracle_with_swap_pair(env: &Env) -> (PriceOracleClient<'static>, Symbol
     let client = PriceOracleClient::new(env, &contract_id);
     let source = symbol_short!("NGN");
     let destination = symbol_short!("GHS");
-    client.set_price(&source, &1_000_000_000_i128, &PRICE_DECIMALS, &PRICE_TTL_LEDGERS);
+    client.set_price(
+        &source,
+        &1_000_000_000_i128,
+        &PRICE_DECIMALS,
+        &PRICE_TTL_LEDGERS,
+    );
     client.set_price(
         &destination,
         &50_000_000_i128,
@@ -57,10 +64,14 @@ fn swap_oracle_entrypoints_log_resources_and_stay_within_budget() {
         assert_eq!(batch.len(), 2);
     }));
 
-    usages.push(measure_entrypoint(&env, "get_price_with_status:source", || {
-        let with_status = client.get_price_with_status(&source);
-        assert!(with_status.data.price > 0);
-    }));
+    usages.push(measure_entrypoint(
+        &env,
+        "get_price_with_status:source",
+        || {
+            let with_status = client.get_price_with_status(&source);
+            assert!(with_status.data.price > 0);
+        },
+    ));
 
     let total_cpu = env
         .budget()
