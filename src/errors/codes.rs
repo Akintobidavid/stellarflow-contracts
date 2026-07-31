@@ -13,6 +13,7 @@ pub enum ErrorCode {
     InvalidSignature = 2002,
     AdminNotFound = 2003,
     NotAuthorizedProvider = 2004,
+    InvalidProof = 2005,
     InvalidArgument = 3001,
     InvalidAsset = 3002,
     AmountTooSmall = 3003,

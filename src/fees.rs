@@ -31,6 +31,48 @@ pub struct CorridorFeePool {
 #[contracttype]
 pub enum FeesStorageKey {
     CorridorPool(AssetId),
+    VolumeHistory(AssetId),
+    DynamicFee(AssetId),
+}
+
+/// Historical volume tracking to calculate volume delta
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VolumeHistory {
+    pub previous_period_volume: u64,
+    pub current_period_volume: u64,
+    pub last_updated: u64, // timestamp when period was last rotated
+}
+
+impl VolumeHistory {
+    fn new() -> Self {
+        Self {
+            previous_period_volume: 0,
+            current_period_volume: 0,
+            last_updated: 0,
+        }
+    }
+}
+
+/// Dynamic fee configuration and current state
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DynamicFeeState {
+    pub min_fee_bps: u32,  // 5 = 0.05%
+    pub max_fee_bps: u32,  // 30 = 0.30%
+    pub current_fee_bps: u32,
+    pub period_seconds: u64, // how often to recalculate (default: 3600 = 1 hour)
+}
+
+impl DynamicFeeState {
+    fn new() -> Self {
+        Self {
+            min_fee_bps: 5,    // 0.05%
+            max_fee_bps: 30,   // 0.30%
+            current_fee_bps: 5, // start at minimum
+            period_seconds: 3600, // 1 hour recalculation period
+        }
+    }
 }
 
 impl CorridorFeePool {
@@ -204,6 +246,136 @@ pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
         .instance()
         .get(&key)
         .unwrap_or(CorridorFeePool::new(asset))
+}
+
+/// Update volume history and recalculate dynamic fee if period has elapsed
+pub fn update_volume_and_adjust_fee(env: &Env, asset: AssetId, trade_volume: u64) -> Result<u32, ContractError> {
+    let volume_key = FeesStorageKey::VolumeHistory(asset.clone());
+    let fee_key = FeesStorageKey::DynamicFee(asset.clone());
+    
+    let mut volume_history: VolumeHistory = env.storage()
+        .instance()
+        .get(&volume_key)
+        .unwrap_or(VolumeHistory::new());
+    
+    let mut dynamic_fee: DynamicFeeState = env.storage()
+        .instance()
+        .get(&fee_key)
+        .unwrap_or(DynamicFeeState::new());
+    
+    let current_timestamp = env.ledger().timestamp();
+    
+    // Check if we need to rotate to a new period
+    if current_timestamp >= volume_history.last_updated + dynamic_fee.period_seconds {
+        // Move current volume to previous, reset current
+        volume_history.previous_period_volume = volume_history.current_period_volume;
+        volume_history.current_period_volume = trade_volume;
+        volume_history.last_updated = current_timestamp;
+        
+        // Calculate volume delta and adjust fee
+        let new_fee = calculate_dynamic_fee(&volume_history, &dynamic_fee)?;
+        dynamic_fee.current_fee_bps = new_fee;
+    } else {
+        // Still in the same period, just add to current volume
+        volume_history.current_period_volume = volume_history.current_period_volume
+            .checked_add(trade_volume)
+            .ok_or(ContractError::MathOverflow)?;
+    }
+    
+    // Save updated state
+    env.storage().instance().set(&volume_key, &volume_history);
+    env.storage().instance().set(&fee_key, &dynamic_fee);
+    
+    Ok(dynamic_fee.current_fee_bps)
+}
+
+/// Calculate volume delta between periods and adjust fee within bounds
+fn calculate_dynamic_fee(volume_history: &VolumeHistory, dynamic_fee: &DynamicFeeState) -> Result<u32, ContractError> {
+    // If no previous volume, keep current fee
+    if volume_history.previous_period_volume == 0 {
+        return Ok(dynamic_fee.current_fee_bps);
+    }
+    
+    // Calculate volume change ratio (current / previous)
+    let volume_delta = volume_history.current_period_volume as f64 / volume_history.previous_period_volume as f64;
+    
+    // Adjust fee based on volume changes:
+    // - Volume spiked > 50%: increase fee to reduce congestion
+    // - Volume dropped > 30%: decrease fee to attract more trading
+    let new_fee_bps = if volume_delta > 1.5 {
+        // Volume increased significantly - raise fee
+        dynamic_fee.current_fee_bps.saturating_add(5)
+    } else if volume_delta < 0.7 {
+        // Volume decreased significantly - lower fee
+        dynamic_fee.current_fee_bps.saturating_sub(5)
+    } else {
+        // No significant change - keep current fee
+        dynamic_fee.current_fee_bps
+    };
+    
+    // Clamp fee to within allowed range [0.05%, 0.30%] = [5bps, 30bps]
+    Ok(new_fee_bps.clamp(dynamic_fee.min_fee_bps, dynamic_fee.max_fee_bps))
+}
+
+/// Get the current dynamic fee for an asset
+pub fn get_current_dynamic_fee(env: &Env, asset: AssetId) -> u32 {
+    let fee_key = FeesStorageKey::DynamicFee(asset);
+    let dynamic_fee: DynamicFeeState = env.storage()
+        .instance()
+        .get(&fee_key)
+        .unwrap_or(DynamicFeeState::new());
+    dynamic_fee.current_fee_bps
+}
+
+/// Calculate and deduct dynamic fee from a trade amount
+pub fn calculate_and_deduct_fee(amount: u128, fee_bps: u32) -> Result<(u128, u128), ContractError> {
+    // Fee is calculated as (amount * fee_bps) / 10000 (since bps is 1/100th of a percent)
+    let fee_amount = amount
+        .checked_mul(fee_bps as u128)
+        .ok_or(ContractError::Overflow)?
+        .checked_div(10000)
+        .ok_or(ContractError::DivisionByZero)?;
+    
+    let amount_after_fees = amount
+        .checked_sub(fee_amount)
+        .ok_or(ContractError::MathOverflow)?;
+    
+    Ok((amount_after_fees, fee_amount))
+}
+
+/// Admin function to update dynamic fee configuration
+pub fn set_dynamic_fee_config(
+    env: &Env,
+    caller: &Address,
+    asset: AssetId,
+    min_fee_bps: u32,
+    max_fee_bps: u32,
+    period_seconds: u64,
+) -> Result<(), ContractError> {
+    use crate::auth::_require_authorized;
+    _require_authorized(env, caller);
+    
+    // Validate bounds
+    if min_fee_bps < 5 || max_fee_bps > 30 || min_fee_bps >= max_fee_bps {
+        return Err(ContractError::InvalidVarianceConfig);
+    }
+    if period_seconds < 300 { // Minimum 5 minutes to prevent excessive recalculations
+        return Err(ContractError::InvalidVarianceConfig);
+    }
+    
+    let fee_key = FeesStorageKey::DynamicFee(asset);
+    let mut dynamic_fee: DynamicFeeState = env.storage()
+        .instance()
+        .get(&fee_key)
+        .unwrap_or(DynamicFeeState::new());
+    
+    dynamic_fee.min_fee_bps = min_fee_bps;
+    dynamic_fee.max_fee_bps = max_fee_bps;
+    dynamic_fee.period_seconds = period_seconds;
+    
+    env.storage().instance().set(&fee_key, &dynamic_fee);
+    
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

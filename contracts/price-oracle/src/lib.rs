@@ -451,7 +451,7 @@ pub trait StellarFlowTrait {
     /// Remove a coordinator node's circuit-breaker privileges.
     ///
     /// Only an authorized admin may call this.
-    fn remove_circuit_breaker_coordinator(
+    fn remove_breaker_coord(
         env: Env,
         admin: Address,
         coordinator: Address,
@@ -2254,10 +2254,19 @@ impl PriceOracle {
         ttl: u64,
         liquidity: i128,
     ) -> Result<(), ContractError> {
-        _require_not_destroyed(&env)?;
-        _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
-        source.require_auth();
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        crate::auth::_require_not_frozen(&env);
+        let auth_args = soroban_sdk::vec![
+            &env,
+            asset.clone().into_val(&env),
+            price.into_val(&env),
+            decimals.into_val(&env),
+            confidence_score.into_val(&env),
+            ttl.into_val(&env),
+            liquidity.into_val(&env),
+        ];
+        crate::auth::_require_auth_for_args(&env, &source, &auth_args);
 
         if !env
             .storage()
@@ -3433,9 +3442,10 @@ impl PriceOracle {
     /// The owner can reassign the delegate by calling this again, or break the
     /// link immediately with `clear_vote_delegate`.
     pub fn delegate_vote(env: Env, owner: Address, delegate: Address) -> Result<(), ContractError> {
-        _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
-        owner.require_auth();
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        let auth_args = soroban_sdk::vec![&env, owner.clone().into_val(&env), delegate.clone().into_val(&env)];
+        crate::auth::_require_auth_for_args(&env, &owner, &auth_args);
 
         if owner == delegate {
             return Err(ContractError::InvalidDelegate);
@@ -3450,8 +3460,9 @@ impl PriceOracle {
 
     /// Remove the owner's active vote delegation.
     pub fn clear_vote_delegate(env: Env, owner: Address) -> Result<(), ContractError> {
-        _require_not_destroyed(&env)?;
-        owner.require_auth();
+        _require_not_destroyed(&env);
+        let auth_args = soroban_sdk::vec![&env, owner.clone().into_val(&env)];
+        crate::auth::_require_auth_for_args(&env, &owner, &auth_args);
 
         crate::auth::_remove_vote_delegate(&env, &owner);
         env.events()
@@ -3471,10 +3482,11 @@ impl PriceOracle {
         admin: Address,
         delegate: Address,
     ) -> Result<(), ContractError> {
-        _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
-        admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        let auth_args = soroban_sdk::vec![&env, admin.clone().into_val(&env), delegate.clone().into_val(&env)];
+        crate::auth::_require_auth_for_args(&env, &admin, &auth_args);
+        crate::auth::_require_authorized(&env, &admin);
 
         if admin == delegate {
             return Err(ContractError::InvalidDelegate);
@@ -3495,9 +3507,10 @@ impl PriceOracle {
 
     /// Remove an active submission delegate from an administrative identity.
     pub fn revoke_delegate(env: Env, admin: Address) -> Result<(), ContractError> {
-        _require_not_destroyed(&env)?;
-        admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        _require_not_destroyed(&env);
+        let auth_args = soroban_sdk::vec![&env, admin.clone().into_val(&env)];
+        crate::auth::_require_auth_for_args(&env, &admin, &auth_args);
+        crate::auth::_require_authorized(&env, &admin);
 
         if let Some(delegate) = crate::auth::_get_delegate(&env, &admin) {
             crate::auth::_remove_delegate(&env, &admin);
@@ -4347,7 +4360,7 @@ impl PriceOracle {
     }
 
     /// Get the relayer's current consecutive missed-block count.
-    pub fn get_provider_consecutive_missed_blocks(env: Env, relayer: Address) -> u32 {
+    pub fn get_missed_blocks(env: Env, relayer: Address) -> u32 {
         crate::slashing::get_consecutive_missed_blocks(&env, &relayer)
     }
 
@@ -4437,14 +4450,14 @@ impl PriceOracle {
 
     /// Claim accumulated rewards for a relayer. This is a thin wrapper that
     /// delegates to the rewards module which enforces Checks-Effects-Interactions.
-    pub fn claim_rewards(env: Env, relayer: Address, token_contract: Address) -> i128 {
+    pub fn claim_relayer_rewards(env: Env, relayer: Address, token_contract: Address) -> i128 {
         crate::rewards::Rewards::claim_rewards(env, relayer, token_contract)
     }
 
     // ── Circuit-Breaker ───────────────────────────────────────────────────────
 
     /// Register a new coordinator node that may trip/reset the circuit-breaker.
-    pub fn register_circuit_breaker_coordinator(
+    pub fn register_breaker_coord(
         env: Env,
         admin: Address,
         coordinator: Address,
@@ -4454,7 +4467,7 @@ impl PriceOracle {
     }
 
     /// Remove a coordinator node's circuit-breaker privileges.
-    pub fn remove_circuit_breaker_coordinator(
+    pub fn remove_breaker_coord(
         env: Env,
         admin: Address,
         coordinator: Address,

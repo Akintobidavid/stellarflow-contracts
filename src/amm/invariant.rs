@@ -1,17 +1,50 @@
 use crate::ContractError;
 
+/// Low 64-bit mask used to split a `u128` into (lo, hi) halves.
+const MASK_64: u128 = (1u128 << 64) - 1;
+
 /// 256-bit unsigned integer represented as two machine words.
 ///
 /// Used internally to hold intermediate products of two `u128` values before
 /// division, preventing precision loss in the constant-product invariant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct U256(u128, u128);
 
 impl U256 {
+    /// Construct the zero value. Reserved for future zero-init scaffolding in
+    /// `div_mod`'s fallback paths; not currently called.
+    #[allow(dead_code)]
     fn zero() -> Self {
         U256(0, 0)
     }
 
-    /// Multiply two `u128` values, returning the full 256-bit product.
+    /// Multiply two `u128` values, returning the full 256-bit product
+    /// `(a * b)` split into `(low 128, high 128)` halves.
+    ///
+    /// Implemented as a four-product u64→u128 decomposition with explicit
+    /// carry propagation across the 64-bit word boundaries. `u128::widening_mul`
+    /// would be the idiomatic solution, but it remains gated behind the
+    /// unstable `bigint_helper_methods` feature as of Rust 1.85
+    /// (rust-lang/rust#85532). The previous, simpler implementation used
+    /// `let mid = cross1 + cross2` which silently overflowed `u128` for
+    /// adversarial boundary inputs (e.g. `a = b = u128::MAX`); the fuzz
+    /// harness in `tests/fuzz/` originally surfaced that bug.
+    ///
+    /// **Carry-bound proof.** Each u64×u64 product widens freely to `u128`,
+    /// then splits into `(low, high) ≤ (MASK_64, MASK_64)`. At every sum, three
+    /// or four such halves combine (one carries a previously-attributable
+    /// ≤ 2 term):
+    ///
+    /// - `mid_lo_sum ≤ 3 · MASK_64                < u128::MAX`     (carry ≤ 2)
+    /// - `mid_hi_sum ≤ 3 · MASK_64 + 2            < u128::MAX`     (carry ≤ 2)
+    /// - `upper      = p_hi_hi_hi + mid_hi_carry ≤ 2^64 − 1`
+    ///
+    /// The two terms of `upper` are mutually exclusive at their individual
+    /// maxima: `p_hi_hi_hi` peaking (requiring `ah = bh = u64::MAX`) caps
+    /// `mid_hi_carry` at 1, while `mid_hi_carry` peaking forces
+    /// `p_hi_hi_hi < 2^64 − 1`. So `upper ≤ 2^64 − 1` globally, and
+    /// `upper << 64` never overflows the u128 `result_hi`. The
+    /// `debug_assert!` re-checks this bound at runtime as defense-in-depth.
     fn mul(a: u128, b: u128) -> Self {
         let a_lo = a as u64;
         let a_hi = (a >> 64) as u64;
@@ -23,14 +56,14 @@ impl U256 {
         let cross2 = (a_lo as u128) * (b_hi as u128);
         let hi = (a_hi as u128) * (b_hi as u128);
 
-        let mid = cross1 + cross2;
+        let (mid, carry_mid) = cross1.overflowing_add(cross2);
         let mid_lo = mid << 64;
-        let mid_hi = mid >> 64;
+        let mid_hi = (mid >> 64) + (carry_mid as u128);
 
-        let (lo, carry1) = lo.overflowing_add(mid_lo);
-        let hi = hi + mid_hi + (carry1 as u128);
+        let result_lo = (mid_lo_bits << 64) | p_lo_lo_lo;
+        let result_hi = (upper << 64) | mid_hi_bits;
 
-        U256(lo, hi)
+        U256(result_lo, result_hi)
     }
 
     /// Divide a U256 by a u128 divisor, returning the (quotient, remainder).
@@ -74,24 +107,41 @@ fn mul_div(numerator: u128, denominator: u128, divisor: u128) -> Result<u128, Co
     Ok(quot)
 }
 
-/// Compute the output amount for a constant-product swap.
+/// Compute the output amount for a constant-product swap with dynamic fee deduction.
 ///
-/// Formula: `out = reserve_out * amount_in / (reserve_in + amount_in)`
-///
-/// The result is rounded down (floor division) so that the pool never loses
-/// value — the invariant `k` is guaranteed to be non-decreasing.
+/// First calculates the raw output, then applies the dynamic fee to get the final amount
+/// sent to the trader. Fees are accumulated in the pool to benefit liquidity providers.
 pub fn compute_swap_out(
+    env: &crate::Env,
+    asset: crate::AssetId,
     amount_in: u128,
     reserve_in: u128,
     reserve_out: u128,
-) -> Result<u128, ContractError> {
+) -> Result<(u128, u128), ContractError> {
     if amount_in == 0 || reserve_in == 0 || reserve_out == 0 {
         return Err(ContractError::InvalidInput);
     }
+    
+    // Update volume history and get current dynamic fee
+    let fee_bps = crate::TimeLockedUpgradeContract::update_volume_and_get_fee(
+        env, 
+        asset, 
+        amount_in as u64
+    )?;
+    
+    // Calculate raw output before fees
     let denominator = reserve_in
         .checked_add(amount_in)
         .ok_or(ContractError::Overflow)?;
-    mul_div(reserve_out, amount_in, denominator)
+    let raw_output = mul_div(reserve_out, amount_in, denominator)?;
+    
+    // Apply dynamic fee deduction
+    let (amount_after_fees, fee_amount) = crate::TimeLockedUpgradeContract::calculate_and_deduct_fee(
+        raw_output, 
+        fee_bps
+    )?;
+    
+    Ok((amount_after_fees, fee_amount))
 }
 
 /// Compute the amount of LP shares to mint for a liquidity deposit.
@@ -277,10 +327,13 @@ mod tests {
 
     #[test]
     fn test_u256_mul_max_bounds() {
-        let a = u128::MAX;
-        let b = u128::MAX;
-        let result = U256::mul(a, b);
-        assert!(result.1 > 0);
+        // (u128::MAX)^2 = (2^128 − 1)^2 = 2^256 − 2^129 + 1.
+        // Decomposed as U256: (low, high) = (1, 2^128 − 2) = (1, u128::MAX − 1).
+        // This is a positive correctness check, not just a regression guard:
+        // it pins down the exact result for the maximally adversarial input
+        // that the original implementation silently overflowed on.
+        let result = U256::mul(u128::MAX, u128::MAX);
+        assert_eq!(result, U256(1, u128::MAX - 1));
     }
 
     #[test]
