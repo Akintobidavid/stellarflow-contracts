@@ -262,6 +262,9 @@ fn execute_single_hop(
         return Err(ContractError::ZeroSwapAmount);
     }
 
+    // Reject dust swap inputs below the minimum transfer threshold.
+    crate::validation::dust::check_min_transfer(amount_in)?;
+
     // Resolve corridor fee pool for the input asset.
     let mut pool = fees::get_corridor_fee_pool(env.clone(), step.asset_in);
     if pool.asset != step.asset_in {

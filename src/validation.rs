@@ -18,6 +18,12 @@
 //! from sufficiently liquid markets that cannot be easily manipulated through
 //! temporary capital injection attacks.
 
+// ── Submodules ────────────────────────────────────────────────────────────────
+
+/// Anti-spam dust transaction guard.
+pub mod dust;
+pub use dust::{check_min_transfer, MIN_TRANSFER_AMOUNT};
+
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 
 use crate::{AssetId, ContractError, CONSENSUS_CACHE_KEY, STAKE_REGISTRY_KEY};

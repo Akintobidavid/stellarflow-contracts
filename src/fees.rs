@@ -216,6 +216,8 @@ pub fn add_corridor_fees(
     variable_fee: u64,
 ) -> Result<CorridorFeePool, ContractError> {
     admin.require_auth();
+    // Reject dust deposits that fall below the minimum transfer threshold.
+    crate::validation::dust::check_min_transfer(collected)?;
     let data = TimeLockedUpgradeContract::get_data(env.clone())?;
     if data.admin != admin {
         return Err(ContractError::NotAdmin);
