@@ -215,6 +215,14 @@ pub enum ContractError {
     AmountTooLow = 48,
     NullifierAlreadyUsed = 48,
     InvalidProof = 49,
+    BridgeAssetNotRegistered = 50,
+    BridgeInvalidMaxSupply = 51,
+    BridgeAssetAlreadyRegistered = 52,
+    BridgeInvalidAmount = 53,
+    BridgeNotController = 54,
+    BridgeSupplyCapExceeded = 55,
+    BridgeInsufficientBalance = 56,
+    BridgeEscrowNotConfigured = 57,
 }
 
 // Contract state keys
@@ -1334,6 +1342,40 @@ impl TimeLockedUpgradeContract {
 
     pub fn wrapped_asset_config(env: Env, asset_code: Symbol) -> Option<bridge::mint::BridgeAssetConfig> {
         bridge::mint::get_config(&env, asset_code)
+    }
+
+    // --- Native bridge escrow (Issue #750) ---
+
+    pub fn configure_bridge_escrow(
+        env: Env, admin: Address, native_token: Address,
+    ) -> Result<bridge::escrow::BridgeEscrowConfig, ContractError> {
+        bridge::escrow::configure(&env, admin, native_token)
+    }
+
+    pub fn lock_tokens(
+        env: Env, depositor: Address, amount: i128, target_chain_id: u32, recipient_address: Address,
+    ) -> Result<bridge::escrow::TokenLock, ContractError> {
+        bridge::escrow::lock_tokens(&env, depositor, amount, target_chain_id, recipient_address)
+    }
+
+    pub fn unlock_tokens(
+        env: Env,
+        proof: bridge::escrow::UnlockProof,
+        signatures: Vec<(BytesN<32>, BytesN<64>)>,
+    ) -> Result<i128, ContractError> {
+        bridge::escrow::unlock_tokens(&env, proof, signatures)
+    }
+
+    pub fn get_bridge_lock(env: Env, lock_id: u64) -> Option<bridge::escrow::TokenLock> {
+        bridge::escrow::get_lock(&env, lock_id)
+    }
+
+    pub fn bridge_vault_balance(env: Env) -> i128 {
+        bridge::escrow::vault_balance(&env)
+    }
+
+    pub fn bridge_escrow_config(env: Env) -> Option<bridge::escrow::BridgeEscrowConfig> {
+        bridge::escrow::get_config(&env)
     }
 
     // --- Private Helpers ---
