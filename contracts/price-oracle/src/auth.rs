@@ -26,6 +26,18 @@ pub enum DataKey {
     ProposedAction(u64),
     /// Stores the list of voters for a proposed multi-sig action.
     ActionVotes(u64),
+    /// Stores affirmative and negative voter addresses separately.
+    ActionAffirmativeVotes(u64),
+    ActionNegativeVotes(u64),
+    /// Stores weighted totals for each side of a proposal.
+    ActionAffirmativeWeight(u64),
+    ActionNegativeWeight(u64),
+    /// Stores the snapshot weight recorded for a voter on a proposal.
+    ActionVoteWeight(u64, Address),
+    /// veFLOW lock contract used to read proposal-time voting power.
+    VeflowLockContract,
+    /// Circulating veFLOW supply used for quorum calculations.
+    VeflowCirculatingSupply,
     /// Maps an admin address to their ephemeral submission delegate.
     SubmissionDelegate(Address),
     /// Maps a delegate address back to the admin who authorized it.
