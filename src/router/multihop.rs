@@ -176,6 +176,7 @@ pub fn validate_route(env: &Env, route: &Route) -> Result<(), ContractError> {
 /// On success the temporary snapshot entry is explicitly cleaned up to free
 /// ledger space immediately rather than waiting for TTL expiry.
 pub fn execute_route(env: &Env, route: &Route) -> Result<RouteResult, ContractError> {
+    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
     // ── Phase 1: Pre-validation ─────────────────────────────────────────
     validate_route(env, route)?;
 

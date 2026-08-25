@@ -138,6 +138,7 @@ pub fn set_performance_fee(env: &Env, admin: Address, fee_bps: u32) -> Result<Va
 /// Deposit `amount` of the underlying asset and mint pro-rata `sfvToken`
 /// shares. The first depositor mints 1:1.
 pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, ContractError> {
+    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
     if amount <= 0 {
         return Err(ContractError::VaultZeroAmount);
     }
@@ -180,7 +181,9 @@ pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, Cont
 
 /// Burn `shares` and withdraw the pro-rata amount of underlying asset.
 pub fn withdraw(env: &Env, owner: Address, shares: i128) -> Result<i128, ContractError> {
+    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
     if shares <= 0 {
+
         return Err(ContractError::VaultZeroAmount);
     }
     let config = load_config(env)?;

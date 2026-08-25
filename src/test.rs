@@ -1580,3 +1580,46 @@ fn test_feed_stake_restoration_does_not_grant_permanent_immunity() {
     assert_eq!(client.get_feed_stake(&node, &asset), 0u64);
 }
 
+#[test]
+fn test_reentrancy_guard_blocks_reentrant_calls() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    env.as_contract(&contract_id, || {
+        // Manually acquire reentrancy lock to simulate active contract entrypoint
+        crate::security::reentrancy::lock(&env).unwrap();
+        assert!(crate::security::reentrancy::is_locked(&env));
+
+        // Calling vault_deposit should revert with ReentrancyDetected
+        let depositor = soroban_sdk::Address::generate(&env);
+        let res = client.try_vault_deposit(&depositor, &100i128);
+        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+
+        // Calling vault_withdraw should revert with ReentrancyDetected
+        let owner = soroban_sdk::Address::generate(&env);
+        let res = client.try_vault_withdraw(&owner, &100i128);
+        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+
+        // Calling mint_wrapped should revert with ReentrancyDetected
+        let controller = soroban_sdk::Address::generate(&env);
+        let to = soroban_sdk::Address::generate(&env);
+        let res = client.try_mint_wrapped(&controller, &symbol_short!("USDC"), &to, &100i128);
+        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+
+        // Calling burn_wrapped should revert with ReentrancyDetected
+        let res = client.try_burn_wrapped(&controller, &symbol_short!("USDC"), &to, &100i128);
+        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+
+        // Calling cancel_limit_order should revert with ReentrancyDetected
+        let maker = soroban_sdk::Address::generate(&env);
+        let res = client.try_cancel_limit_order(&maker, &1u64);
+        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+
+        // Release lock
+        crate::security::reentrancy::unlock(&env);
+        assert!(!crate::security::reentrancy::is_locked(&env));
+    });
+}
+
