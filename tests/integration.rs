@@ -91,25 +91,25 @@ fn test_mock_oracle_price_updates_offline() {
     let ghs = symbol_short!("GHS");
 
     // Initially no prices are set.
-    assert!(mock_oracle_get_price(&env, &oracle_id, ngn).is_none());
-    assert!(mock_oracle_get_price(&env, &oracle_id, kes).is_none());
+    assert!(mock_oracle_get_price(&env, &oracle_id, ngn.clone()).is_none());
+    assert!(mock_oracle_get_price(&env, &oracle_id, kes.clone()).is_none());
 
     // Simulate price feed updates.
-    mock_oracle_update_price(&env, &oracle_id, ngn, 1_500_000_i128);
-    mock_oracle_update_price(&env, &oracle_id, kes, 50_000_000_000_i128);
+    mock_oracle_update_price(&env, &oracle_id, ngn.clone(), 1_500_000_i128);
+    mock_oracle_update_price(&env, &oracle_id, kes.clone(), 50_000_000_000_i128);
 
     // Verify prices were stored correctly.
-    let ngn_price = mock_oracle_get_price(&env, &oracle_id, ngn);
+    let ngn_price = mock_oracle_get_price(&env, &oracle_id, ngn.clone());
     assert!(ngn_price.is_some());
     assert_eq!(ngn_price.unwrap(), 1_500_000_i128);
 
-    let kes_price = mock_oracle_get_price(&env, &oracle_id, kes);
+    let kes_price = mock_oracle_get_price(&env, &oracle_id, kes.clone());
     assert!(kes_price.is_some());
     assert_eq!(kes_price.unwrap(), 50_000_000_000_i128);
 
     // Verify a missing price returns None.
-    assert!(mock_oracle_get_price(&env, &oracle_id, ghs).is_none());
-    assert!(!mock_oracle_has_price(&env, &oracle_id, ghs));
+    assert!(mock_oracle_get_price(&env, &oracle_id, ghs.clone()).is_none());
+    assert!(!mock_oracle_has_price(&env, &oracle_id, ghs.clone()));
 
     // Batch price update.
     mock_oracle_set_prices(
@@ -119,11 +119,11 @@ fn test_mock_oracle_price_updates_offline() {
     );
 
     assert_eq!(
-        mock_oracle_get_price(&env, &oracle_id, ghs).unwrap(),
+        mock_oracle_get_price(&env, &oracle_id, ghs.clone()).unwrap(),
         4_500_000_i128
     );
     assert_eq!(
-        mock_oracle_get_price(&env, &oracle_id, ngn).unwrap(),
+        mock_oracle_get_price(&env, &oracle_id, ngn.clone()).unwrap(),
         1_600_000_i128
     );
 
@@ -152,8 +152,8 @@ fn test_offline_trade_with_token_and_oracle_mocks() {
     let ngn = symbol_short!("NGN");
     let usdc = symbol_short!("USDC");
 
-    mock_oracle_update_price(&env, &oracle_id, ngn, 1_500_000_i128);
-    mock_oracle_update_price(&env, &oracle_id, usdc, 1_000_000_000_i128);
+    mock_oracle_update_price(&env, &oracle_id, ngn.clone(), 1_500_000_i128);
+    mock_oracle_update_price(&env, &oracle_id, usdc.clone(), 1_000_000_000_i128);
 
     // Simulate a trade: trader wants to sell 100 NGN to receive USDC.
     // The price is 1_500_000 NGN per base unit, so 100 NGN = 150_000_000_000 base units
@@ -161,7 +161,7 @@ fn test_offline_trade_with_token_and_oracle_mocks() {
     let sell_amount: i128 = 100;
 
     // Check the oracle price before executing the transfer.
-    let ngn_price = mock_oracle_get_price(&env, &oracle_id, ngn).unwrap();
+    let ngn_price = mock_oracle_get_price(&env, &oracle_id, ngn.clone()).unwrap();
     assert_eq!(ngn_price, 1_500_000_i128);
 
     // Verify trader has sufficient balance.
@@ -205,7 +205,7 @@ fn test_offline_trade_with_token_and_oracle_mocks() {
 
     // Verify the oracle price is still accessible (no side effects).
     assert_eq!(
-        mock_oracle_get_price(&env, &oracle_id, ngn).unwrap(),
+        mock_oracle_get_price(&env, &oracle_id, ngn.clone()).unwrap(),
         1_500_000_i128
     );
 }

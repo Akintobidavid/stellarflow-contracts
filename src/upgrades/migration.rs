@@ -36,7 +36,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_node_profiles_key = Symbol::new(env, "NODES");
     if env.storage().instance().has(&legacy_node_profiles_key) {
-        if let Some(profiles: Map<Address, NodeProfile>) = env.storage().instance().get(&legacy_node_profiles_key) {
+        if let Some(profiles) = env.storage().instance().get::<_, Map<Address, NodeProfile>>(&legacy_node_profiles_key) {
             for (address, profile) in profiles.iter() {
                 let key = NodeProfileKey(address.clone());
                 env.storage().persistent().set(&key, &profile);
@@ -47,7 +47,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_signers_key = Symbol::new(env, "SIGNERS");
     if env.storage().instance().has(&legacy_signers_key) {
-        if let Some(signers: Map<Address, bool>) = env.storage().instance().get(&legacy_signers_key) {
+        if let Some(signers) = env.storage().instance().get::<_, Map<Address, bool>>(&legacy_signers_key) {
             for (address, _) in signers.iter() {
                 let key = SignerKey(address.clone());
                 env.storage().instance().set(&key, &true);
@@ -58,7 +58,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_stake_registry_key = Symbol::new(env, "STAKES");
     if env.storage().instance().has(&legacy_stake_registry_key) {
-        if let Some(stakes: Map<Address, u64>) = env.storage().instance().get(&legacy_stake_registry_key) {
+        if let Some(stakes) = env.storage().instance().get::<_, Map<Address, u64>>(&legacy_stake_registry_key) {
             for (address, amount) in stakes.iter() {
                 let key = StakeKey(address.clone());
                 env.storage().instance().set(&key, &amount);
@@ -76,7 +76,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_heartbeat_key = Symbol::new(env, "HBEAT");
     if env.storage().instance().has(&legacy_heartbeat_key) {
-        if let Some(heartbeats: Map<u32, u64>) = env.storage().instance().get(&legacy_heartbeat_key) {
+        if let Some(heartbeats) = env.storage().instance().get::<_, Map<u32, u64>>(&legacy_heartbeat_key) {
             for (asset_id, timestamp) in heartbeats.iter() {
                 let key = HeartbeatKey(asset_id);
                 env.storage().temporary().set(&key, &timestamp);
@@ -95,10 +95,11 @@ pub fn migrate_feed_metrics(env: &Env, asset: u32) -> AssetFeedMetrics {
     }
 
     let legacy_key = Symbol::new(env, "METRICS");
-    if let Some(legacy: AssetFeedMetrics) = env.storage().instance().get(&legacy_key) {
+    if let Some(legacy) = env.storage().instance().get::<_, AssetFeedMetrics>(&legacy_key) {
         env.storage().persistent().set(&metrics_key, &legacy);
         return legacy;
     }
 
     AssetFeedMetrics { volume_score: 0, volatility_bps: 0 }
 }
+
