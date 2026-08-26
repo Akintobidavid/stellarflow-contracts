@@ -223,6 +223,10 @@ pub enum ContractError {
     BridgeSupplyCapExceeded = 55,
     BridgeInsufficientBalance = 56,
     BridgeEscrowNotConfigured = 57,
+    /// Vault subsystem is paused; deposit and harvest are blocked.
+    VaultPaused = 58,
+    /// Caller is not the designated emergency admin.
+    NotEmergencyAdmin = 59,
 }
 
 // Contract state keys
@@ -1045,6 +1049,45 @@ impl TimeLockedUpgradeContract {
     /// - [`ContractError::ThresholdNotReached`] if insufficient signers.
     pub fn emergency_unpause(env: Env, caller: Address, signers: Vec<Address>) -> Result<(), ContractError> {
         crate::security::pausable::emergency_unpause(&env, &caller, &signers)
+    }
+
+    // --- Vault Emergency Pause Guard (Issue #717) ---
+
+    /// Returns `true` when the vault subsystem is independently paused.
+    pub fn is_vault_paused(env: Env) -> bool {
+        crate::vaults::pause_guard::is_vault_paused(&env)
+    }
+
+    /// Pause vault interactions (deposits and harvests) while allowing
+    /// emergency withdrawals.  Only the contract admin may call this.
+    pub fn pause_vault(env: Env, caller: Address) -> Result<(), ContractError> {
+        crate::vaults::pause_guard::pause_vault(&env, &caller)
+    }
+
+    /// Resume vault interactions after a vault-specific pause.
+    /// Only the contract admin may call this.
+    pub fn unpause_vault(env: Env, caller: Address) -> Result<(), ContractError> {
+        crate::vaults::pause_guard::unpause_vault(&env, &caller)
+    }
+
+    /// Execute an emergency vault withdrawal while the vault is paused.
+    ///
+    /// This is the *only* vault interaction permitted during a vault pause.
+    /// The caller must be the asset owner (or an admin) and must authorize
+    /// the transaction.
+    pub fn emergency_vault_withdraw(
+        env: Env,
+        caller: Address,
+        asset: Symbol,
+        amount: u128,
+    ) -> Result<(), ContractError> {
+        crate::vaults::pause_guard::emergency_vault_withdraw(
+            &env,
+            &caller,
+            asset,
+            amount,
+            |_env, _caller, _asset, _amount| Ok(()),
+        )
     }
 
     // --- Per-action admin nonce query (Issue #529) ---
