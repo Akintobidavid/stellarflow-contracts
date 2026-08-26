@@ -493,6 +493,118 @@ pub trait StellarFlowTrait {
 
     /// Return a snapshot of the circuit-breaker state for monitoring dashboards.
     fn get_circuit_breaker_info(env: Env) -> crate::admin::CircuitBreakerInfo;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Dynamic Slippage Protection
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Set the global slippage configuration parameters.
+    ///
+    /// Configures dynamic slippage tolerance calculation based on volatility and liquidity.
+    /// Only authorized admin can call this function.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must be authorized)
+    /// * `config` - The slippage configuration parameters
+    fn set_slippage_config(
+        env: Env,
+        admin: Address,
+        config: crate::slippage::SlippageConfig,
+    ) -> Result<(), ContractError>;
+
+    /// Get the current slippage configuration.
+    ///
+    /// Returns the current configuration or defaults if none has been set.
+    fn get_slippage_config(env: Env) -> crate::slippage::SlippageConfig;
+
+    /// Update volatility metrics when a new price is observed.
+    ///
+    /// This should be called automatically by price update functions to maintain
+    /// accurate volatility tracking for dynamic slippage calculation.
+    ///
+    /// # Arguments
+    /// * `asset` - The asset symbol whose price changed
+    /// * `new_price` - The new price value
+    fn update_volatility_metrics(
+        env: Env,
+        asset: Symbol,
+        new_price: i128,
+    ) -> Result<(), ContractError>;
+
+    /// Get volatility metrics for a specific asset.
+    ///
+    /// Returns `None` if no price observations have been recorded yet.
+    fn get_volatility_metrics(
+        env: Env,
+        asset: Symbol,
+    ) -> Option<crate::slippage::VolatilityMetrics>;
+
+    /// Get the EMA volatility value in basis points for an asset.
+    ///
+    /// Returns 0 if no metrics exist for the asset.
+    fn get_asset_volatility_bps(env: Env, asset: Symbol) -> u32;
+
+    /// Calculate dynamic slippage tolerance based on volatility and liquidity.
+    ///
+    /// # Arguments
+    /// * `from_asset` - Source asset symbol
+    /// * `to_asset` - Destination asset symbol
+    /// * `liquidity` - Available liquidity for the swap
+    ///
+    /// # Returns
+    /// Dynamic slippage tolerance in basis points
+    fn calculate_dynamic_slippage(
+        env: Env,
+        from_asset: Symbol,
+        to_asset: Symbol,
+        liquidity: i128,
+    ) -> Result<u32, ContractError>;
+
+    /// Execute a swap with dynamic slippage protection.
+    ///
+    /// This is the primary entry point for swaps with automatic slippage calculation.
+    /// Slippage tolerance is calculated based on market volatility and liquidity conditions.
+    ///
+    /// # Arguments
+    /// * `from_asset` - Source asset symbol
+    /// * `to_asset` - Destination asset symbol
+    /// * `amount_in` - Amount to swap
+    /// * `manual_min_out` - Optional user-specified minimum output (0 = use dynamic only)
+    /// * `liquidity` - Available liquidity for this swap
+    ///
+    /// # Returns
+    /// Actual output amount if swap succeeds
+    ///
+    /// # Errors
+    /// Returns `Error::SlippageToleranceExceeded` if output is below acceptable minimum
+    fn execute_swap_with_dynamic_slippage(
+        env: Env,
+        from_asset: Symbol,
+        to_asset: Symbol,
+        amount_in: i128,
+        manual_min_out: i128,
+        liquidity: i128,
+    ) -> Result<i128, ContractError>;
+
+    /// Execute a swap with manual slippage tolerance (no dynamic adjustment).
+    ///
+    /// Bypasses dynamic slippage calculation and uses a fixed tolerance specified by the caller.
+    ///
+    /// # Arguments
+    /// * `from_asset` - Source asset symbol
+    /// * `to_asset` - Destination asset symbol
+    /// * `amount_in` - Amount to swap
+    /// * `manual_slippage_bps` - Fixed slippage tolerance in basis points
+    ///
+    /// # Returns
+    /// Actual output amount if swap succeeds
+    fn execute_swap_with_manual_slippage(
+        env: Env,
+        from_asset: Symbol,
+        to_asset: Symbol,
+        amount_in: i128,
+        manual_slippage_bps: u32,
+    ) -> Result<i128, ContractError>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -660,6 +772,10 @@ pub enum ContractError {
     InvalidAdminWeight = 61,
     /// Weight threshold value is invalid (below minimum or above maximum).
     InvalidWeightThreshold = 62,
+    /// Cannot calculate deviation with zero expected/consensus rate.
+    DeviationConsensusZero = 63,
+    /// Division by zero prevented - denominator must be non-zero.
+    InvalidDenominator = 64,
 }
 
 pub type Error = ContractError;
@@ -4528,6 +4644,104 @@ impl PriceOracle {
     pub fn get_circuit_breaker_info(env: Env) -> crate::admin::CircuitBreakerInfo {
         crate::admin::get_circuit_breaker_info(&env)
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Dynamic Slippage Protection Implementation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Set the global slippage configuration parameters
+    pub fn set_slippage_config(
+        env: Env,
+        admin: Address,
+        config: crate::slippage::SlippageConfig,
+    ) -> Result<(), ContractError> {
+        crate::slippage::set_slippage_config(&env, admin, config)
+    }
+
+    /// Get the current slippage configuration
+    pub fn get_slippage_config(env: Env) -> crate::slippage::SlippageConfig {
+        crate::slippage::get_slippage_config(&env)
+    }
+
+    /// Update volatility metrics when a new price is observed
+    pub fn update_volatility_metrics(
+        env: Env,
+        asset: Symbol,
+        new_price: i128,
+    ) -> Result<(), ContractError> {
+        crate::slippage::update_volatility_metrics(&env, asset, new_price)
+    }
+
+    /// Get volatility metrics for a specific asset
+    pub fn get_volatility_metrics(
+        env: Env,
+        asset: Symbol,
+    ) -> Option<crate::slippage::VolatilityMetrics> {
+        crate::slippage::get_volatility_metrics(&env, asset)
+    }
+
+    /// Get the EMA volatility value in basis points for an asset
+    pub fn get_asset_volatility_bps(env: Env, asset: Symbol) -> u32 {
+        crate::slippage::get_asset_volatility_bps(&env, asset)
+    }
+
+    /// Calculate dynamic slippage tolerance based on volatility and liquidity
+    pub fn calculate_dynamic_slippage(
+        env: Env,
+        from_asset: Symbol,
+        to_asset: Symbol,
+        liquidity: i128,
+    ) -> Result<u32, ContractError> {
+        crate::slippage::calculate_dynamic_slippage(&env, from_asset, to_asset, liquidity)
+    }
+
+    /// Execute a swap with dynamic slippage protection
+    pub fn execute_swap_with_dynamic_slippage(
+        env: Env,
+        from_asset: Symbol,
+        to_asset: Symbol,
+        amount_in: i128,
+        manual_min_out: i128,
+        liquidity: i128,
+    ) -> Result<i128, ContractError> {
+        // Get current prices for both assets
+        let from_price = Self::get_last_price(env.clone(), from_asset.clone())?;
+        let to_price = Self::get_last_price(env.clone(), to_asset.clone())?;
+        
+        crate::slippage::execute_swap_with_dynamic_slippage(
+            &env,
+            from_asset,
+            to_asset,
+            amount_in,
+            manual_min_out,
+            liquidity,
+            from_price,
+            to_price,
+        )
+    }
+
+    /// Execute a swap with manual slippage tolerance
+    pub fn execute_swap_with_manual_slippage(
+        env: Env,
+        from_asset: Symbol,
+        to_asset: Symbol,
+        amount_in: i128,
+        manual_slippage_bps: u32,
+    ) -> Result<i128, ContractError> {
+        // Get current prices for both assets
+        let from_price = Self::get_last_price(env.clone(), from_asset.clone())?;
+        let to_price = Self::get_last_price(env.clone(), to_asset.clone())?;
+        
+        crate::slippage::execute_swap_with_manual_slippage(
+            &env,
+            from_asset,
+            to_asset,
+            amount_in,
+            manual_slippage_bps,
+            from_price,
+            to_price,
+        )
+    }
 }
 
 mod asset_symbol;
@@ -4539,6 +4753,7 @@ mod delegate_tests;
 pub mod math;
 mod median;
 pub mod slashing;
+pub mod slippage;
 mod test;
 mod types;
 mod validation;
