@@ -83,6 +83,25 @@ fn checked_sub_balance(current: i128, delta: i128) -> Result<i128, ContractError
     current.checked_sub(delta).ok_or(ContractError::MathOverflow)
 }
 
+/// Invariant check: assert token reserves exactly match internal balance ledger.
+/// Panics immediately if any drift is detected between actual contract balance
+/// and the internally tracked VaultBalance.
+fn assert_balance_invariant(env: &Env, config: &BridgeEscrowConfig) {
+    let token_client = token::Client::new(env, &config.native_token);
+    let actual_balance = token_client.balance(&env.current_contract_address());
+    
+    let balance_key = BridgeEscrowStorageKey::VaultBalance(config.native_token.clone());
+    let tracked_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+    
+    assert_eq!(
+        actual_balance,
+        tracked_balance,
+        "Balance invariant violated: actual={}, tracked={}",
+        actual_balance,
+        tracked_balance
+    );
+}
+
 pub fn configure(
     env: &Env,
     admin: Address,
@@ -109,6 +128,10 @@ pub fn lock_tokens(
 
     depositor.require_auth();
     let config = load_config(env)?;
+    
+    // Invariant check: verify balance consistency before state change
+    assert_balance_invariant(env, &config);
+    
     let token_client = token::Client::new(env, &config.native_token);
     token_client.transfer(&depositor, &env.current_contract_address(), &amount);
 
@@ -145,6 +168,9 @@ pub fn lock_tokens(
         (lock.id, amount, target_chain_id, recipient_address),
     );
 
+    // Invariant check: verify balance consistency after state change
+    assert_balance_invariant(env, &config);
+
     Ok(lock)
 }
 
@@ -159,6 +185,9 @@ pub fn unlock_tokens(
 
     relayer::verify_cross_chain_payload(env, proof.proof_hash.clone(), signatures)?;
     let config = load_config(env)?;
+
+    // Invariant check: verify balance consistency before state change
+    assert_balance_invariant(env, &config);
 
     let balance_key = BridgeEscrowStorageKey::VaultBalance(config.native_token.clone());
     let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
@@ -180,6 +209,9 @@ pub fn unlock_tokens(
         (symbol_short!("tok_unlk"), config.native_token, proof.recipient),
         (proof.proof_hash, proof.source_chain_id, proof.amount, new_balance),
     );
+
+    // Invariant check: verify balance consistency after state change
+    assert_balance_invariant(env, &config);
 
     Ok(new_balance)
 }

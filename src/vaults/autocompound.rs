@@ -92,6 +92,23 @@ fn set_share_balance(env: &Env, holder: &Address, balance: i128) {
     }
 }
 
+/// Invariant check: assert token reserves exactly match internal balance ledger.
+/// Panics immediately if any drift is detected between actual contract balance
+/// and the internally tracked TotalAssets.
+fn assert_balance_invariant(env: &Env, config: &VaultConfig) {
+    let token_client = token::Client::new(env, &config.asset);
+    let actual_balance = token_client.balance(&env.current_contract_address());
+    let tracked_assets = total_assets(env);
+    
+    assert_eq!(
+        actual_balance,
+        tracked_assets,
+        "Balance invariant violated: actual={}, tracked_assets={}",
+        actual_balance,
+        tracked_assets
+    );
+}
+
 /// One-time vault setup. `admin` governs the performance fee configuration;
 /// it is independent of the main contract's admin so a vault can be deployed
 /// and re-parented without touching protocol-wide administration.
@@ -144,6 +161,9 @@ pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, Cont
     let config = load_config(env)?;
     depositor.require_auth();
 
+    // Invariant check: verify balance consistency before state change
+    assert_balance_invariant(env, &config);
+
     let assets = total_assets(env);
     let shares = total_shares(env);
 
@@ -175,6 +195,9 @@ pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, Cont
         holder_balance.checked_add(minted).ok_or(ContractError::MathOverflow)?,
     );
 
+    // Invariant check: verify balance consistency after state change
+    assert_balance_invariant(env, &config);
+
     Ok(minted)
 }
 
@@ -185,6 +208,9 @@ pub fn withdraw(env: &Env, owner: Address, shares: i128) -> Result<i128, Contrac
     }
     let config = load_config(env)?;
     owner.require_auth();
+
+    // Invariant check: verify balance consistency before state change
+    assert_balance_invariant(env, &config);
 
     let holder_balance = share_balance_of(env, &owner);
     if shares > holder_balance {
@@ -217,6 +243,9 @@ pub fn withdraw(env: &Env, owner: Address, shares: i128) -> Result<i128, Contrac
     let token_client = token::Client::new(env, &config.asset);
     token_client.transfer(&env.current_contract_address(), &owner, &owed);
 
+    // Invariant check: verify balance consistency after state change
+    assert_balance_invariant(env, &config);
+
     Ok(owed)
 }
 
@@ -231,6 +260,9 @@ pub fn harvest(env: &Env, keeper: Address, yield_amount: i128) -> Result<Harvest
     }
     let config = load_config(env)?;
     keeper.require_auth();
+
+    // Invariant check: verify balance consistency before state change
+    assert_balance_invariant(env, &config);
 
     let token_client = token::Client::new(env, &config.asset);
     token_client.transfer(&keeper, &env.current_contract_address(), &yield_amount);
@@ -254,6 +286,9 @@ pub fn harvest(env: &Env, keeper: Address, yield_amount: i128) -> Result<Harvest
         (soroban_sdk::symbol_short!("harvest"), keeper),
         (yield_amount, fee, compounded, new_assets),
     );
+
+    // Invariant check: verify balance consistency after state change
+    assert_balance_invariant(env, &config);
 
     Ok(HarvestResult {
         gross_yield: yield_amount,
