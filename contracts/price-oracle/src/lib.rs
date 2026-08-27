@@ -216,6 +216,24 @@ pub trait StellarFlowTrait {
     /// Vote for a proposed action.
     fn vote_for_action(env: Env, voter: Address, action_id: u64) -> Result<u32, ContractError>;
 
+    /// Vote against a proposed action.
+    fn vote_against_action(env: Env, voter: Address, action_id: u64) -> Result<u32, ContractError>;
+
+    /// Configure the veFLOW lock reader and circulating supply used for voting.
+    fn set_veflow_governance(
+        env: Env,
+        admin: Address,
+        lock_contract: Address,
+        circulating_supply: i128,
+    ) -> Result<(), ContractError>;
+
+    /// Return affirmative and negative voting weight for a proposal.
+    fn get_action_vote_totals(env: Env, action_id: u64) -> (i128, i128);
+
+    /// Return affirmative and negative voters for a proposal.
+    fn get_action_affirmative_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address>;
+    fn get_action_negative_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address>;
+
     /// Delegate the owner's vote weight to a proxy representative.
     fn delegate_vote(env: Env, owner: Address, delegate: Address) -> Result<(), ContractError>;
 
@@ -633,6 +651,7 @@ pub const MAX_RATE_AGE_SECONDS: u64 = 300;
 const VOLATILITY_THRESHOLD_BPS: i128 = 500;
 /// Absolute floor for governance quorum configuration.
 const MIN_SAFE_QUORUM_THRESHOLD: u32 = 2;
+const VEFLOW_QUORUM_BPS: i128 = 1_000;
 
 /// Minimum remaining TTL (in ledgers) for a relayer node profile before an
 /// automatic extension is triggered during `get_price` queries.
@@ -3475,8 +3494,15 @@ impl PriceOracle {
         // Store the proposal
         crate::auth::_set_proposed_action(&env, action_id, &proposed);
 
-        // Add any vote weight that is effective for the proposer.
-        crate::auth::_add_effective_action_votes(&env, action_id, &admin);
+        // Preserve legacy proposer voting; veFLOW proposals require an explicit
+        // snapshot-weighted vote instead.
+        if !env
+            .storage()
+            .persistent()
+            .has(&crate::auth::DataKey::VeflowLockContract)
+        {
+            crate::auth::_add_effective_action_votes(&env, action_id, &admin);
+        }
 
         // Log the action
         let details = format!(
@@ -3497,6 +3523,115 @@ impl PriceOracle {
         Ok(action_id)
     }
 
+    pub fn set_veflow_governance(
+        env: Env,
+        admin: Address,
+        lock_contract: Address,
+        circulating_supply: i128,
+    ) -> Result<(), ContractError> {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        if circulating_supply <= 0 {
+            return Err(ContractError::InvalidStakeAmount);
+        }
+        env.storage()
+            .persistent()
+            .set(&crate::auth::DataKey::VeflowLockContract, &lock_contract);
+        env.storage().persistent().set(
+            &crate::auth::DataKey::VeflowCirculatingSupply,
+            &circulating_supply,
+        );
+        Ok(())
+    }
+
+    fn proposal_voting_weight(
+        env: &Env,
+        voter: &Address,
+        proposed_at: u64,
+    ) -> Result<i128, ContractError> {
+        let lock_contract: Address = env
+            .storage()
+            .persistent()
+            .get(&crate::auth::DataKey::VeflowLockContract)
+            .ok_or(ContractError::NotAuthorized)?;
+        let args = soroban_sdk::vec![&env, voter.to_val(), proposed_at.into_val(env)];
+        let weight: i128 = env.invoke_contract(
+            &lock_contract,
+            &Symbol::new(env, "get_voting_power"),
+            args,
+        );
+        if weight <= 0 {
+            return Err(ContractError::NotAuthorized);
+        }
+        Ok(weight)
+    }
+
+    fn record_vote(
+        env: &Env,
+        voter: &Address,
+        action_id: u64,
+        affirmative: bool,
+    ) -> Result<u32, ContractError> {
+        let proposed = crate::auth::_get_proposed_action(env, action_id)
+            .ok_or(ContractError::ActionNotFound)?;
+        if proposed.executed {
+            return Err(ContractError::ActionAlreadyExecuted);
+        }
+        if proposed.cancelled {
+            return Err(ContractError::ActionCancelled);
+        }
+        let key = if affirmative {
+            crate::auth::DataKey::ActionAffirmativeVotes(action_id)
+        } else {
+            crate::auth::DataKey::ActionNegativeVotes(action_id)
+        };
+        let mut voters: soroban_sdk::Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+        let opposite_key = if affirmative {
+            crate::auth::DataKey::ActionNegativeVotes(action_id)
+        } else {
+            crate::auth::DataKey::ActionAffirmativeVotes(action_id)
+        };
+        let opposite: soroban_sdk::Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&opposite_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+        if voters.iter().any(|address| address == *voter)
+            || opposite.iter().any(|address| address == *voter)
+        {
+            return Err(ContractError::AlreadyVoted);
+        }
+        let weight = if env
+            .storage()
+            .persistent()
+            .has(&crate::auth::DataKey::VeflowLockContract)
+        {
+            Self::proposal_voting_weight(env, voter, proposed.proposed_at)?
+        } else {
+            crate::auth::_get_admin_weight(env, voter) as i128
+        };
+        voters.push_back(voter.clone());
+        env.storage().instance().set(&key, &voters);
+        env.storage().persistent().set(
+            &crate::auth::DataKey::ActionVoteWeight(action_id, voter.clone()),
+            &weight,
+        );
+        let total_key = if affirmative {
+            crate::auth::DataKey::ActionAffirmativeWeight(action_id)
+        } else {
+            crate::auth::DataKey::ActionNegativeWeight(action_id)
+        };
+        let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+        env.storage().persistent().set(&total_key, &(total + weight));
+        Ok(voters.len())
+    }
+
     /// Vote for a proposed action.
     ///
     /// Admins can vote on pending proposals. Once the threshold is reached,
@@ -3512,6 +3647,14 @@ impl PriceOracle {
         _require_not_destroyed(&env)?;
         if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
         voter.require_auth();
+
+        if env
+            .storage()
+            .persistent()
+            .has(&crate::auth::DataKey::VeflowLockContract)
+        {
+            return Self::record_vote(&env, &voter, action_id, true);
+        }
 
         let voter_is_admin = crate::auth::_is_authorized(&env, &voter);
         let voter_delegated_away = crate::auth::_get_vote_delegate(&env, &voter).is_some();
@@ -3551,6 +3694,58 @@ impl PriceOracle {
         );
 
         Ok(vote_count)
+    }
+
+    pub fn vote_against_action(
+        env: Env,
+        voter: Address,
+        action_id: u64,
+    ) -> Result<u32, ContractError> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        voter.require_auth();
+        if env
+            .storage()
+            .persistent()
+            .has(&crate::auth::DataKey::VeflowLockContract)
+            || crate::auth::_is_authorized(&env, &voter)
+        {
+            return Self::record_vote(&env, &voter, action_id, false);
+        }
+        Err(ContractError::NotAuthorized)
+    }
+
+    pub fn get_action_vote_totals(env: Env, action_id: u64) -> (i128, i128) {
+        (
+            env.storage()
+                .persistent()
+                .get(&crate::auth::DataKey::ActionAffirmativeWeight(action_id))
+                .unwrap_or(0),
+            env.storage()
+                .persistent()
+                .get(&crate::auth::DataKey::ActionNegativeWeight(action_id))
+                .unwrap_or(0),
+        )
+    }
+
+    pub fn get_action_affirmative_voters(
+        env: Env,
+        action_id: u64,
+    ) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&crate::auth::DataKey::ActionAffirmativeVotes(action_id))
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+    }
+
+    pub fn get_action_negative_voters(
+        env: Env,
+        action_id: u64,
+    ) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&crate::auth::DataKey::ActionNegativeVotes(action_id))
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
     }
 
     /// Delegate the owner's vote weight to a proxy representative.
