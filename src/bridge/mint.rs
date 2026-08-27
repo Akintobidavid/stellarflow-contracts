@@ -8,7 +8,7 @@
 //! rather than delegated to an external SEP-41 token, so the supply
 //! invariant can be enforced atomically in the same storage write.
 
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 use crate::{ContractData, ContractError, DATA_KEY};
 
@@ -182,7 +182,7 @@ pub fn mint(
     save_config(env, &config);
 
     env.events().publish(
-        (symbol_short!("wtok_mnt"), asset_code, to.clone()),
+        (Symbol::new(env, "WrappedTokenMinted"), asset_code, to.clone()),
         (amount, new_total_supply),
     );
 
@@ -232,7 +232,7 @@ pub fn burn(
     save_config(env, &config);
 
     env.events().publish(
-        (symbol_short!("wtok_brn"), asset_code, from.clone()),
+        (Symbol::new(env, "WrappedTokenBurned"), asset_code, from.clone()),
         (amount, new_total_supply),
     );
 
