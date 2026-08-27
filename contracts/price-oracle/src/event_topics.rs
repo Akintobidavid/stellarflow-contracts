@@ -2,7 +2,14 @@
 //! Events use structured topics so frontends can index updates and configuration
 //! changes by event type and asset without scanning all transaction logs.
 
-use soroban_sdk::{Address, Env, String, Symbol};
+use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
+
+// Event topic constants for dynamic slippage protection
+pub const VOLATILITY: Symbol = symbol_short!("volatility");
+pub const UPDATED: Symbol = symbol_short!("updated");
+pub const SWAP: Symbol = symbol_short!("swap");
+pub const EXECUTED: Symbol = symbol_short!("executed");
+pub const REJECTED: Symbol = symbol_short!("rejected");
 
 /// Publish a canonical price update event for frontend indexing.
 pub fn publish_price_update(env: &Env, asset: Symbol, price: i128, timestamp: u64) {

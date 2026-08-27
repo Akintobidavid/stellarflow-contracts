@@ -15,6 +15,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }
@@ -99,7 +102,7 @@
   ],
   "ledger": {
     "protocol_version": 20,
-    "sequence_number": 0,
+    "sequence_number": 60,
     "timestamp": 301,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 10,
@@ -132,7 +135,7 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "VALUE"
+                        "u32": 1
                       },
                       "val": {
                         "u64": 301
@@ -256,6 +259,14 @@
                             }
                           ]
                         }
+                      },
+                      {
+                        "key": {
+                          "symbol": "TREASURY"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
                       }
                     ]
                   }
@@ -330,7 +341,7 @@
             },
             "ext": "v0"
           },
-          0
+          60
         ]
       ],
       [
@@ -409,7 +420,14 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
             }
           }
         }
@@ -456,7 +474,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 1
             }
           }
         }
@@ -571,7 +589,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 1
             }
           }
         }
@@ -620,7 +638,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 1
             }
           }
         }
@@ -669,7 +687,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 1
             }
           }
         }
@@ -784,7 +802,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 1
             }
           }
         }
