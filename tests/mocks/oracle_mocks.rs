@@ -1,4 +1,4 @@
-use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger, Address, Env, Symbol};
 
 /// A minimal mock price oracle contract for offline integration tests.
 /// Deployed with `env.register_contract` so that contract calls behave as
@@ -32,7 +32,7 @@ pub fn setup_mock_oracle(env: &Env) -> (Address, MockPriceOracleClient) {
 /// submitting a new value.
 pub fn mock_oracle_update_price(env: &Env, oracle_id: &Address, asset: Symbol, price: i128) {
     env.mock_all_auths();
-    let client = MockPriceOracleClient::new(env, oracle_id);
+    let _client = MockPriceOracleClient::new(env, oracle_id);
     env.as_contract(oracle_id, || {
         MockPriceOracle::set_price(env.clone(), asset, price);
     });
@@ -65,3 +65,4 @@ pub fn mock_oracle_advance_time(env: &Env, seconds: u64) {
     env.ledger()
         .with_mut(|li| li.timestamp = current_ts + seconds);
 }
+

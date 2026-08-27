@@ -147,6 +147,7 @@ pub fn mint(
     to: Address,
     amount: i128,
 ) -> Result<i128, ContractError> {
+    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
     if amount <= 0 {
         return Err(ContractError::BridgeInvalidAmount);
     }
@@ -200,7 +201,9 @@ pub fn burn(
     from: Address,
     amount: i128,
 ) -> Result<i128, ContractError> {
+    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
     if amount <= 0 {
+
         return Err(ContractError::BridgeInvalidAmount);
     }
     let mut config = load_config(env, &asset_code)?;
