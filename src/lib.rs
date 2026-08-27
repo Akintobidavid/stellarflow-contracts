@@ -225,6 +225,8 @@ pub enum ContractError {
     BridgeEscrowNotConfigured = 57,
     /// Reentrancy guard detected a reentrant call during execution.
     ReentrancyDetected = 58,
+    /// Flash-loan borrower did not return principal plus protocol fee.
+    FlashLoanRepaymentIncomplete = 59,
 }
 
 // Contract state keys
@@ -1307,6 +1309,13 @@ impl TimeLockedUpgradeContract {
         vaults::autocompound::harvest(&env, keeper, yield_amount)
     }
 
+    pub fn vault_flash_loan(
+        env: Env, borrower: Address, amount: i128,
+    ) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        vaults::autocompound::flash_loan(&env, borrower, amount)
+    }
+
     pub fn vault_total_assets(env: Env) -> i128 {
         vaults::autocompound::get_total_assets(&env)
     }
@@ -1323,6 +1332,64 @@ impl TimeLockedUpgradeContract {
         vaults::autocompound::get_config(&env)
     }
 
+    pub fn init_yield_farming(
+        env: Env,
+        admin: Address,
+        lp_token: Address,
+        reward_token: Address,
+        emission_per_ledger: i128,
+    ) -> Result<vaults::lp_farming::FarmingConfig, ContractError> {
+        vaults::lp_farming::initialize(
+            &env,
+            admin,
+            lp_token,
+            reward_token,
+            emission_per_ledger,
+        )
+    }
+
+    pub fn fund_yield_rewards(
+        env: Env,
+        funder: Address,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        vaults::lp_farming::fund_rewards(&env, funder, amount)
+    }
+
+    pub fn stake_lp(env: Env, user: Address, amount: i128) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        vaults::lp_farming::stake(&env, user, amount)
+    }
+
+    pub fn claim_rewards(env: Env, user: Address) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        vaults::lp_farming::claim_rewards(&env, user)
+    }
+
+    pub fn exit_yield_farming(
+        env: Env,
+        user: Address,
+    ) -> Result<(i128, i128), ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        vaults::lp_farming::exit(&env, user)
+    }
+
+    pub fn set_emission_multiplier(
+        env: Env,
+        governance: Address,
+        multiplier: u32,
+    ) -> Result<vaults::lp_farming::FarmingConfig, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        vaults::lp_farming::set_emission_multiplier(&env, governance, multiplier)
+    }
+
+    pub fn pending_yield_rewards(
+        env: Env,
+        user: Address,
+    ) -> Result<i128, ContractError> {
+        vaults::lp_farming::pending_rewards(&env, user)
+    }
+
     // ── On-chain limit order book (Issue #701) ───────────────────────────────
 
     pub fn place_limit_order(
@@ -1330,6 +1397,25 @@ impl TimeLockedUpgradeContract {
     ) -> Result<orders::limit::LimitOrder, ContractError> {
         let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         orders::limit::place_order(&env, maker, pair, price_tick, sell_amount)
+    }
+
+    pub fn place_limit_order_with_expiry(
+        env: Env,
+        maker: Address,
+        pair: orders::limit::AssetPair,
+        price_tick: i128,
+        sell_amount: i128,
+        expiry: u32,
+    ) -> Result<orders::limit::LimitOrder, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        orders::limit::place_order_with_expiry(
+            &env,
+            maker,
+            pair,
+            price_tick,
+            sell_amount,
+            expiry,
+        )
     }
 
     pub fn fill_limit_order(
