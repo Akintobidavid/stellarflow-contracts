@@ -223,10 +223,8 @@ pub enum ContractError {
     BridgeSupplyCapExceeded = 55,
     BridgeInsufficientBalance = 56,
     BridgeEscrowNotConfigured = 57,
-    /// Vault subsystem is paused; deposit and harvest are blocked.
-    VaultPaused = 58,
-    /// Caller is not the designated emergency admin.
-    NotEmergencyAdmin = 59,
+    /// Reentrancy guard detected a reentrant call during execution.
+    ReentrancyDetected = 58,
 }
 
 // Contract state keys
@@ -1291,10 +1289,12 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn vault_deposit(env: Env, depositor: Address, amount: i128) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         vaults::autocompound::deposit(&env, depositor, amount)
     }
 
     pub fn vault_withdraw(env: Env, owner: Address, shares: i128) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         vaults::autocompound::withdraw(&env, owner, shares)
     }
 
@@ -1303,6 +1303,7 @@ impl TimeLockedUpgradeContract {
     pub fn vault_harvest(
         env: Env, keeper: Address, yield_amount: i128,
     ) -> Result<vaults::autocompound::HarvestResult, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         vaults::autocompound::harvest(&env, keeper, yield_amount)
     }
 
@@ -1327,17 +1328,20 @@ impl TimeLockedUpgradeContract {
     pub fn place_limit_order(
         env: Env, maker: Address, pair: orders::limit::AssetPair, price_tick: i128, sell_amount: i128,
     ) -> Result<orders::limit::LimitOrder, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         orders::limit::place_order(&env, maker, pair, price_tick, sell_amount)
     }
 
     pub fn fill_limit_order(
         env: Env, filler: Address, order_id: u64, fill_amount: i128,
     ) -> Result<orders::limit::FillResult, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         orders::limit::fill_order(&env, filler, order_id, fill_amount)
     }
 
     /// Cancel a still-open order and return its unfilled balance to the maker.
     pub fn cancel_limit_order(env: Env, maker: Address, order_id: u64) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         orders::limit::cancel_order(&env, maker, order_id)
     }
 
@@ -1347,6 +1351,15 @@ impl TimeLockedUpgradeContract {
 
     pub fn get_orders_at_tick(env: Env, pair: orders::limit::AssetPair, price_tick: i128) -> Vec<u64> {
         orders::limit::get_orders_at_tick(&env, pair, price_tick)
+    }
+
+    // ── Multi-hop Route Swaps ───────────────────────────────────────────────
+
+    pub fn execute_route(
+        env: Env, route: router::multihop::Route,
+    ) -> Result<router::multihop::RouteResult, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        router::multihop::execute_route(&env, &route)
     }
 
     // ── Wrapped cross-chain asset mint/burn controls (Issue #692) ───────────
@@ -1368,6 +1381,7 @@ impl TimeLockedUpgradeContract {
     pub fn mint_wrapped(
         env: Env, controller: Address, asset_code: Symbol, to: Address, amount: i128,
     ) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         bridge::mint::mint(&env, controller, asset_code, to, amount)
     }
 
@@ -1376,6 +1390,7 @@ impl TimeLockedUpgradeContract {
     pub fn burn_wrapped(
         env: Env, controller: Address, asset_code: Symbol, from: Address, amount: i128,
     ) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         bridge::mint::burn(&env, controller, asset_code, from, amount)
     }
 
@@ -1398,6 +1413,7 @@ impl TimeLockedUpgradeContract {
     pub fn lock_tokens(
         env: Env, depositor: Address, amount: i128, target_chain_id: u32, recipient_address: Address,
     ) -> Result<bridge::escrow::TokenLock, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         bridge::escrow::lock_tokens(&env, depositor, amount, target_chain_id, recipient_address)
     }
 
@@ -1406,6 +1422,7 @@ impl TimeLockedUpgradeContract {
         proof: bridge::escrow::UnlockProof,
         signatures: Vec<(BytesN<32>, BytesN<64>)>,
     ) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         bridge::escrow::unlock_tokens(&env, proof, signatures)
     }
 
