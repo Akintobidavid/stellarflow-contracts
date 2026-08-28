@@ -1,6 +1,8 @@
+pub mod events;
 pub mod liquidity;
 pub mod swaps;
 
+pub use events::*;
 pub use liquidity::{
     publish_liquidity_added, publish_liquidity_removed, LiquidityAddedEvent,
     LiquidityRemovedEvent,
