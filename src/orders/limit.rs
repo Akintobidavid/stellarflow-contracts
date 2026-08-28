@@ -57,8 +57,10 @@ pub struct FillResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OrderStorageKey {
     NextOrderId,
-    /// Order struct keyed by its unique id.
-    Order(u64),
+    /// Index from the public order id to its canonical composite storage key.
+    OrderIndex(u64),
+    /// Order struct keyed by `(AssetPair, PriceTick, OrderID)`.
+    Order(AssetPair, i128, u64),
     /// Resting-order index bucket keyed by `(AssetPair, PriceTick)`, listing
     /// the ids of every order posted at that exact tick for that pair — this
     /// is the `(AssetPair, PriceTick, OrderID)` addressing scheme fill
@@ -77,17 +79,35 @@ fn next_order_id(env: &Env) -> u64 {
 }
 
 fn load_order(env: &Env, order_id: u64) -> Result<LimitOrder, ContractError> {
+    let index: (AssetPair, i128) = env
+        .storage()
+        .persistent()
+        .get(&OrderStorageKey::OrderIndex(order_id))
+        .ok_or(ContractError::OrderNotFound)?;
     env.storage()
         .persistent()
-        .get(&OrderStorageKey::Order(order_id))
+        .get(&OrderStorageKey::Order(index.0, index.1, order_id))
         .ok_or(ContractError::OrderNotFound)
 }
 
 fn save_order(env: &Env, order: &LimitOrder) {
-    let key = OrderStorageKey::Order(order.id);
+    let key = OrderStorageKey::Order(
+        order.pair.clone(),
+        order.price_tick,
+        order.id,
+    );
     env.storage().persistent().set(&key, order);
     env.storage().persistent().extend_ttl(
         &key,
+        crate::storage::PERSISTENT_TTL_THRESHOLD,
+        crate::storage::PERSISTENT_TTL_THRESHOLD,
+    );
+    let index_key = OrderStorageKey::OrderIndex(order.id);
+    env.storage()
+        .persistent()
+        .set(&index_key, &(order.pair.clone(), order.price_tick));
+    env.storage().persistent().extend_ttl(
+        &index_key,
         crate::storage::PERSISTENT_TTL_THRESHOLD,
         crate::storage::PERSISTENT_TTL_THRESHOLD,
     );
@@ -267,7 +287,7 @@ pub fn cancel_order(env: &Env, maker: Address, order_id: u64) -> Result<i128, Co
 }
 
 pub fn get_order(env: &Env, order_id: u64) -> Option<LimitOrder> {
-    env.storage().persistent().get(&OrderStorageKey::Order(order_id))
+    load_order(env, order_id).ok()
 }
 
 /// List the ids of every order currently resting at `(pair, price_tick)`.

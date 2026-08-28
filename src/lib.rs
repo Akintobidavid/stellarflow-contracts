@@ -68,6 +68,7 @@ pub mod amm;
 pub mod admin;
 pub mod auth;
 pub mod bridge;
+pub mod escrow;
 pub mod config;
 pub mod kernel;
 pub mod orders;
@@ -175,8 +176,7 @@ pub enum ContractError {
     BridgeEscrowNotConfigured = 57,
     /// Reentrancy guard detected a reentrant call during execution.
     ReentrancyDetected = 58,
-    /// Flash-loan borrower did not return principal plus protocol fee.
-    FlashLoanRepaymentIncomplete = 59,
+    MerkleTreeFull = 59,
     NullifierAlreadyUsed = 49,
     InvalidProof = 50,
     ReentrancyDetected = 59,
@@ -714,6 +714,54 @@ impl TimeLockedUpgradeContract {
 
     pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> fees::CorridorFeePool {
         crate::fees::get_corridor_fee_pool(env, asset)
+    }
+
+    pub fn record_lp_fee(
+        env: Env,
+        admin: Address,
+        asset: AssetId,
+        fee_amount: u64,
+    ) -> Result<settlement::fees::LiquidityPool, ContractError> {
+        settlement::fees::record_fee(&env, admin, asset, fee_amount)
+    }
+
+    pub fn add_lp_liquidity(
+        env: Env,
+        provider: Address,
+        asset: AssetId,
+        reserve_a: u128,
+        reserve_b: u128,
+        lp_units: u64,
+    ) -> Result<settlement::fees::LiquidityPosition, ContractError> {
+        settlement::fees::add_liquidity(
+            &env,
+            provider,
+            asset,
+            reserve_a,
+            reserve_b,
+            lp_units,
+        )
+    }
+
+    pub fn redeem_lp_liquidity(
+        env: Env,
+        provider: Address,
+        asset: AssetId,
+        lp_units: u64,
+    ) -> Result<settlement::fees::RedemptionResult, ContractError> {
+        settlement::fees::redeem_liquidity(&env, provider, asset, lp_units)
+    }
+
+    pub fn get_lp_pool(env: Env, asset: AssetId) -> settlement::fees::LiquidityPool {
+        settlement::fees::get_pool(&env, asset)
+    }
+
+    pub fn get_lp_position(
+        env: Env,
+        asset: AssetId,
+        provider: Address,
+    ) -> Option<settlement::fees::LiquidityPosition> {
+        settlement::fees::get_position(&env, asset, provider)
     }
 
     /// Get the current dynamic trading fee for an asset (in basis points)
@@ -1487,6 +1535,30 @@ impl TimeLockedUpgradeContract {
 
     pub fn bridge_escrow_config(env: Env) -> Option<bridge::escrow::BridgeEscrowConfig> {
         bridge::escrow::get_config(&env)
+    }
+
+    // --- Private remittance commitment tree ---
+
+    pub fn insert_commitment(
+        env: Env, commitment: BytesN<32>,
+    ) -> Result<(u64, BytesN<32>), ContractError> {
+        escrow::merkle::insert(&env, commitment)
+    }
+
+    pub fn commitment_root(env: Env) -> BytesN<32> {
+        escrow::merkle::current_root(&env)
+    }
+
+    pub fn commitment_next_index(env: Env) -> u64 {
+        escrow::merkle::next_index(&env)
+    }
+
+    pub fn is_known_commitment_root(env: Env, root: BytesN<32>) -> bool {
+        escrow::merkle::is_known_root(&env, root)
+    }
+
+    pub fn commitment_root_history(env: Env) -> Vec<BytesN<32>> {
+        escrow::merkle::root_history(&env)
     }
 
     // --- Private Helpers ---
