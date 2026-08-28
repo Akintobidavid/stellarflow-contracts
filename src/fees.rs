@@ -31,6 +31,48 @@ pub struct CorridorFeePool {
 #[contracttype]
 pub enum FeesStorageKey {
     CorridorPool(AssetId),
+    VolumeHistory(AssetId),
+    DynamicFee(AssetId),
+}
+
+/// Historical volume tracking to calculate volume delta
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VolumeHistory {
+    pub previous_period_volume: u64,
+    pub current_period_volume: u64,
+    pub last_updated: u64, // timestamp when period was last rotated
+}
+
+impl VolumeHistory {
+    fn new() -> Self {
+        Self {
+            previous_period_volume: 0,
+            current_period_volume: 0,
+            last_updated: 0,
+        }
+    }
+}
+
+/// Dynamic fee configuration and current state
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DynamicFeeState {
+    pub min_fee_bps: u32,  // 5 = 0.05%
+    pub max_fee_bps: u32,  // 30 = 0.30%
+    pub current_fee_bps: u32,
+    pub period_seconds: u64, // how often to recalculate (default: 3600 = 1 hour)
+}
+
+impl DynamicFeeState {
+    fn new() -> Self {
+        Self {
+            min_fee_bps: 5,    // 0.05%
+            max_fee_bps: 30,   // 0.30%
+            current_fee_bps: 5, // start at minimum
+            period_seconds: 3600, // 1 hour recalculation period
+        }
+    }
 }
 
 impl CorridorFeePool {
@@ -41,6 +83,94 @@ impl CorridorFeePool {
             variable_pool: 0,
         }
     }
+}
+
+/// Scale an intermediate product into interior precision space before division.
+fn scale_product_to_interior(a: u128, b: u128) -> Result<u128, ContractError> {
+    a.checked_mul(b)
+        .ok_or(ContractError::Overflow)?
+        .checked_mul(INTERIOR_SCALE)
+        .ok_or(ContractError::Overflow)
+}
+
+/// Normalize an interior-space quotient back to the 10^7 fixed-point footprint.
+pub fn normalize_to_fixed_point_footprint(interior_value: u128) -> Result<u64, ContractError> {
+    let normalized = interior_value
+        .checked_div(INTERIOR_SCALE)
+        .ok_or(ContractError::DivisionByZero)?;
+    u64::try_from(normalized).map_err(|_| ContractError::Overflow)
+}
+
+/// Multiply two fixed-point values and scale down to the 10^7 footprint.
+///
+/// Pre-multiplies the intermediate product by `INTERIOR_SCALE` before the
+/// division step, then normalizes the result back to the standard footprint.
+pub fn multiply_and_scale_down(a: u64, b: u64) -> Result<u64, ContractError> {
+    let interior_product = scale_product_to_interior(u128::from(a), u128::from(b))?;
+    let interior_quotient = interior_product
+        .checked_div(FIXED_POINT_SCALE)
+        .ok_or(ContractError::DivisionByZero)?;
+    normalize_to_fixed_point_footprint(interior_quotient)
+}
+
+/// Compute a single relayer's corridor usage fee share from the variable pool.
+///
+/// Uses interior scaling so fractional weights do not truncate before the
+/// final stroop allocation is written to ledger storage.
+pub fn compute_corridor_usage_fee_share(
+    total_fee: u64,
+    relayer_usage: u64,
+    total_usage: u64,
+) -> Result<u64, ContractError> {
+    if total_usage == 0 {
+        return Err(ContractError::DivisionByZero);
+    }
+    if total_fee == 0 || relayer_usage == 0 {
+        return Ok(0);
+    }
+
+    let interior_numerator = u128::from(total_fee)
+        .checked_mul(u128::from(relayer_usage))
+        .ok_or(ContractError::Overflow)?
+        .checked_mul(INTERIOR_SCALE)
+        .ok_or(ContractError::Overflow)?;
+
+    let interior_quotient = interior_numerator / u128::from(total_usage);
+    normalize_to_fixed_point_footprint(interior_quotient)
+}
+
+/// Compute a relayer's fee share across a multi-hop corridor path.
+///
+/// Combines hop-level and relayer-level usage weights in one interior-scaled
+/// pass to avoid compounded truncation error across separate relayers.
+pub fn compute_multi_hop_corridor_fee_share(
+    total_fee: u64,
+    hop_usage: u64,
+    relayer_usage: u64,
+    total_hop_usage: u64,
+    total_relayer_usage: u64,
+) -> Result<u64, ContractError> {
+    if total_hop_usage == 0 || total_relayer_usage == 0 {
+        return Err(ContractError::DivisionByZero);
+    }
+    if total_fee == 0 || hop_usage == 0 || relayer_usage == 0 {
+        return Ok(0);
+    }
+
+    let interior_numerator = u128::from(total_fee)
+        .checked_mul(u128::from(hop_usage))
+        .ok_or(ContractError::Overflow)?
+        .checked_mul(u128::from(relayer_usage))
+        .ok_or(ContractError::Overflow)?
+        .checked_mul(INTERIOR_SCALE)
+        .ok_or(ContractError::Overflow)?;
+
+    let interior_denominator = u128::from(total_hop_usage)
+        .checked_mul(u128::from(total_relayer_usage))
+        .ok_or(ContractError::Overflow)?;
+
+    let interior_quotient = interior_numerator / interior_denominator;
+    normalize_to_fixed_point_footprint(interior_quotient)
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +216,9 @@ pub fn add_corridor_fees(
     variable_fee: u64,
 ) -> Result<CorridorFeePool, ContractError> {
     admin.require_auth();
-    let data = TimeLockedUpgradeContract::get_data(env.clone())?;
+    // Reject dust deposits that fall below the minimum transfer threshold.
+    crate::validation::dust::check_min_transfer(collected)?;
+    let data = TimeLockedUpgradeContract::load_data(&env)?;
     if data.admin != admin {
         return Err(ContractError::NotAdmin);
     }
@@ -99,11 +231,11 @@ pub fn add_corridor_fees(
     pool.collected = pool
         .collected
         .checked_add(collected)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
     pool.variable_pool = pool
         .variable_pool
         .checked_add(variable_fee)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
     env.storage().instance().set(&key, &pool);
     Ok(pool)
 }
@@ -116,6 +248,177 @@ pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
         .unwrap_or(CorridorFeePool::new(asset))
 }
 
+/// Update volume history and recalculate dynamic fee if period has elapsed
+pub fn update_volume_and_adjust_fee(env: &Env, asset: AssetId, trade_volume: u64) -> Result<u32, ContractError> {
+    let volume_key = FeesStorageKey::VolumeHistory(asset.clone());
+    let fee_key = FeesStorageKey::DynamicFee(asset.clone());
+    
+    let mut volume_history: VolumeHistory = env.storage()
+        .instance()
+        .get(&volume_key)
+        .unwrap_or(VolumeHistory::new());
+    
+    let mut dynamic_fee: DynamicFeeState = env.storage()
+        .instance()
+        .get(&fee_key)
+        .unwrap_or(DynamicFeeState::new());
+    
+    let current_timestamp = env.ledger().timestamp();
+    
+    // Check if we need to rotate to a new period
+    if current_timestamp >= volume_history.last_updated + dynamic_fee.period_seconds {
+        // Move current volume to previous, reset current
+        volume_history.previous_period_volume = volume_history.current_period_volume;
+        volume_history.current_period_volume = trade_volume;
+        volume_history.last_updated = current_timestamp;
+        
+        // Calculate volume delta and adjust fee
+        let new_fee = calculate_dynamic_fee(&volume_history, &dynamic_fee)?;
+        dynamic_fee.current_fee_bps = new_fee;
+    } else {
+        // Still in the same period, just add to current volume
+        volume_history.current_period_volume = volume_history.current_period_volume
+            .checked_add(trade_volume)
+            .ok_or(ContractError::MathOverflow)?;
+    }
+    
+    // Save updated state
+    env.storage().instance().set(&volume_key, &volume_history);
+    env.storage().instance().set(&fee_key, &dynamic_fee);
+    
+    Ok(dynamic_fee.current_fee_bps)
+}
+
+/// Calculate volume delta between periods and adjust fee within bounds
+fn calculate_dynamic_fee(volume_history: &VolumeHistory, dynamic_fee: &DynamicFeeState) -> Result<u32, ContractError> {
+    // If no previous volume, keep current fee
+    if volume_history.previous_period_volume == 0 {
+        return Ok(dynamic_fee.current_fee_bps);
+    }
+    
+    // Calculate volume change ratio (current / previous)
+    let volume_delta = volume_history.current_period_volume as f64 / volume_history.previous_period_volume as f64;
+    
+    // Adjust fee based on volume changes:
+    // - Volume spiked > 50%: increase fee to reduce congestion
+    // - Volume dropped > 30%: decrease fee to attract more trading
+    let new_fee_bps = if volume_delta > 1.5 {
+        // Volume increased significantly - raise fee
+        dynamic_fee.current_fee_bps.saturating_add(5)
+    } else if volume_delta < 0.7 {
+        // Volume decreased significantly - lower fee
+        dynamic_fee.current_fee_bps.saturating_sub(5)
+    } else {
+        // No significant change - keep current fee
+        dynamic_fee.current_fee_bps
+    };
+    
+    // Clamp fee to within allowed range [0.05%, 0.30%] = [5bps, 30bps]
+    Ok(new_fee_bps.clamp(dynamic_fee.min_fee_bps, dynamic_fee.max_fee_bps))
+}
+
+/// Get the current dynamic fee for an asset
+pub fn get_current_dynamic_fee(env: &Env, asset: AssetId) -> u32 {
+    let fee_key = FeesStorageKey::DynamicFee(asset);
+    let dynamic_fee: DynamicFeeState = env.storage()
+        .instance()
+        .get(&fee_key)
+        .unwrap_or(DynamicFeeState::new());
+    dynamic_fee.current_fee_bps
+}
+
+/// Calculate and deduct dynamic fee from a trade amount
+pub fn calculate_and_deduct_fee(amount: u128, fee_bps: u32) -> Result<(u128, u128), ContractError> {
+    // Fee is calculated as (amount * fee_bps) / 10000 (since bps is 1/100th of a percent)
+    let fee_amount = amount
+        .checked_mul(fee_bps as u128)
+        .ok_or(ContractError::Overflow)?
+        .checked_div(10000)
+        .ok_or(ContractError::DivisionByZero)?;
+    
+    let amount_after_fees = amount
+        .checked_sub(fee_amount)
+        .ok_or(ContractError::MathOverflow)?;
+    
+    Ok((amount_after_fees, fee_amount))
+}
+
+/// Admin function to update dynamic fee configuration
+pub fn set_dynamic_fee_config(
+    env: &Env,
+    caller: &Address,
+    asset: AssetId,
+    min_fee_bps: u32,
+    max_fee_bps: u32,
+    period_seconds: u64,
+) -> Result<(), ContractError> {
+    caller.require_auth();
+    let data = TimeLockedUpgradeContract::load_data(env)?;
+    if data.admin != *caller {
+        return Err(ContractError::NotAdmin);
+    }
+    
+    // Validate bounds
+    if min_fee_bps < 5 || max_fee_bps > 30 || min_fee_bps >= max_fee_bps {
+        return Err(ContractError::InvalidVarianceConfig);
+    }
+    if period_seconds < 300 { // Minimum 5 minutes to prevent excessive recalculations
+        return Err(ContractError::InvalidVarianceConfig);
+    }
+    
+    let fee_key = FeesStorageKey::DynamicFee(asset);
+    let mut dynamic_fee: DynamicFeeState = env.storage()
+        .instance()
+        .get(&fee_key)
+        .unwrap_or(DynamicFeeState::new());
+    
+    dynamic_fee.min_fee_bps = min_fee_bps;
+    dynamic_fee.max_fee_bps = max_fee_bps;
+    dynamic_fee.period_seconds = period_seconds;
+    
+    env.storage().instance().set(&fee_key, &dynamic_fee);
+    
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Corridor weight profile functions — independent access control (issue #530)
+// ---------------------------------------------------------------------------
+
+/// Set or update the corridor weight profile for an asset.
+/// Uses its own admin check so weight edits are gated independently
+/// from fee pool writes.
+pub fn set_corridor_weight(
+    env: Env,
+    admin: Address,
+    asset: AssetId,
+    base_weight: u64,
+    dynamic_weight: u64,
+) -> Result<CorridorWeightProfile, ContractError> {
+    admin.require_auth();
+    let data = TimeLockedUpgradeContract::load_data(&env)?;
+    if data.admin != admin {
+        return Err(ContractError::NotAdmin);
+    }
+    let key = CorridorWeightKey::Profile(asset.clone());
+    let profile = CorridorWeightProfile {
+        asset: asset.clone(),
+        base_weight,
+        dynamic_weight,
+    };
+    env.storage().persistent().set(&key, &profile);
+    Ok(profile)
+}
+
+/// Read the corridor weight profile for an asset.
+pub fn get_corridor_weight(env: Env, asset: AssetId) -> CorridorWeightProfile {
+    let key = CorridorWeightKey::Profile(asset.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(CorridorWeightProfile::new(asset))
+}
+
 pub fn distribute_variable_fee_pool(
     env: &Env,
     variable_pool: u64,
@@ -125,7 +428,7 @@ pub fn distribute_variable_fee_pool(
         .iter()
         .try_fold(0_i128, |acc, weight| {
             acc.checked_add(weight as i128)
-                .ok_or(ContractError::Overflow)
+                .ok_or(ContractError::MathOverflow)
         })?;
 
     let mut profiles = Vec::new(env);
@@ -135,10 +438,10 @@ pub fn distribute_variable_fee_pool(
 
     let pool_profile = (variable_pool as i128)
         .checked_mul(STANDARD_FIXED_POINT_SCALE)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
     let interior_pool_profile = pool_profile
         .checked_mul(INTERIOR_FEE_PRECISION_SCALE)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
 
     let last_index = relayer_weights.len() - 1;
     let mut assigned_profile = 0_i128;
@@ -147,14 +450,14 @@ pub fn distribute_variable_fee_pool(
         let profile = if index == last_index {
             pool_profile
                 .checked_sub(assigned_profile)
-                .ok_or(ContractError::Overflow)?
+                .ok_or(ContractError::MathOverflow)?
         } else {
             let weight = relayer_weights
                 .get(index)
-                .ok_or(ContractError::Overflow)? as i128;
+                .ok_or(ContractError::MathOverflow)? as i128;
             let interior_share = interior_pool_profile
                 .checked_mul(weight)
-                .ok_or(ContractError::Overflow)?
+                .ok_or(ContractError::MathOverflow)?
                 .checked_div(total_weight)
                 .ok_or(ContractError::DivisionByZero)?;
             interior_share
@@ -164,8 +467,8 @@ pub fn distribute_variable_fee_pool(
 
         assigned_profile = assigned_profile
             .checked_add(profile)
-            .ok_or(ContractError::Overflow)?;
-        profiles.push_back(profile.try_into().map_err(|_| ContractError::Overflow)?);
+            .ok_or(ContractError::MathOverflow)?;
+        profiles.push_back(profile.try_into().map_err(|_| ContractError::MathOverflow)?);
     }
 
     Ok(profiles)
@@ -174,6 +477,51 @@ pub fn distribute_variable_fee_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TimeLockedUpgradeContractClient;
+    use soroban_sdk::testutils::Address as _;
+
+    fn setup() -> (Env, TimeLockedUpgradeContractClient<'static>, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+        let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        client.initialize(&admin, &treasury);
+        (env, client, admin, attacker)
+    }
+
+    #[test]
+    fn corridor_weight_profile_is_isolated_from_fee_pool() {
+        let (_, client, admin, _) = setup();
+        let asset = 3897123275;
+
+        let pool = client.add_corridor_fees(&admin, &asset, &1_000, &25);
+        assert_eq!(pool.collected, 1_000);
+        assert_eq!(pool.variable_pool, 25);
+
+        let profile = client.set_corridor_weight(&admin, &asset, &70, &30);
+        assert_eq!(profile.asset, asset);
+        assert_eq!(profile.base_weight, 70);
+        assert_eq!(profile.dynamic_weight, 30);
+
+        let unchanged_pool = client.get_corridor_fee_pool(&asset);
+        assert_eq!(unchanged_pool.collected, 1_000);
+        assert_eq!(unchanged_pool.variable_pool, 25);
+
+        let stored_profile = client.get_corridor_weight(&asset);
+        assert_eq!(stored_profile.base_weight, 70);
+        assert_eq!(stored_profile.dynamic_weight, 30);
+    }
+
+    #[test]
+    fn non_admin_cannot_edit_corridor_weight_profile() {
+        let (_, client, _, attacker) = setup();
+        let result = client.try_set_corridor_weight(&attacker, &2654435761, &40, &60);
+
+        assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+    }
 
     #[test]
     fn fee_distribution_normalizes_to_standard_fixed_point_footprint() {
@@ -248,7 +596,9 @@ mod tests {
 
     #[test]
     fn test_normalize_to_fixed_point_footprint_overflow() {
-        let too_large = u128::from(u64::MAX) * u128::from(u64::MAX) * INTERIOR_SCALE;
+        // A value whose interior-scaled quotient exceeds u64::MAX once divided
+        // back down, without overflowing the u128 computation itself.
+        let too_large: u128 = (u128::from(u64::MAX) + 1) * INTERIOR_SCALE;
         assert_eq!(
             normalize_to_fixed_point_footprint(too_large),
             Err(ContractError::Overflow)
