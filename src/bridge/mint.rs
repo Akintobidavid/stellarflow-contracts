@@ -183,6 +183,7 @@ pub fn mint(
 
     env.events().publish(
         (Symbol::new(env, "WrappedTokenMinted"), asset_code, to.clone()),
+        (symbol_short!("wtok_mnt"), asset_code.clone(), to.clone()),
         (amount, new_total_supply),
     );
 
@@ -233,6 +234,7 @@ pub fn burn(
 
     env.events().publish(
         (Symbol::new(env, "WrappedTokenBurned"), asset_code, from.clone()),
+        (symbol_short!("wtok_brn"), asset_code.clone(), from.clone()),
         (amount, new_total_supply),
     );
 
