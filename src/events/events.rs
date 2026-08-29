@@ -140,6 +140,9 @@ pub const EV_BALLOT_OPENED: Symbol = symbol_short!("ball_open");
 /// Governance: a revocation ballot was closed.
 pub const EV_BALLOT_CLOSED: Symbol = symbol_short!("ball_clos");
 
+/// Flash loan: fees were distributed 50/50 to LP pool and DAO treasury.
+pub const EV_FLASH_FEES_DISTRIBUTED: Symbol = symbol_short!("fl_dist");
+
 // ---------------------------------------------------------------------------
 // Core publishing function
 // ---------------------------------------------------------------------------
@@ -206,6 +209,30 @@ pub fn validate_topics(topic_count: u32) -> Result<(), ContractError> {
     } else {
         Ok(())
     }
+}
+
+/// Event payload emitted when flash loan service fees are distributed.
+#[soroban_sdk::contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlashLoanFeesDistributedEvent {
+    pub asset: crate::AssetId,
+    pub total_amount: u64,
+    pub lp_share: u64,
+    pub treasury_share: u64,
+    pub lp_reward_pool: soroban_sdk::Address,
+    pub treasury: soroban_sdk::Address,
+}
+
+pub fn publish_flash_fees_distributed(
+    env: &Env,
+    event: FlashLoanFeesDistributedEvent,
+) {
+    let _ = emit_simple2(
+        env,
+        EV_FLASH_FEES_DISTRIBUTED,
+        Symbol::new(env, "flash_fees"),
+        event,
+    );
 }
 
 /// Return the number of topics a well-formed event would have given

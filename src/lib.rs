@@ -252,7 +252,8 @@ const PLATFORM_CAPITAL_KEY: Symbol = symbol_short!("CAPITAL");
 pub(crate) const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
 const RELAYER_TTL_THRESHOLD: u32 = 5_000;
 const INSTANCE_TTL_EXTEND: u32 = 100_000;
-const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+pub(crate) const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+pub(crate) const LP_REWARD_POOL_KEY: Symbol = symbol_short!("LPREWARD");
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
 const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 const RECOVERY_KEY: Symbol = symbol_short!("RKEY");
@@ -762,6 +763,38 @@ impl TimeLockedUpgradeContract {
         provider: Address,
     ) -> Option<settlement::fees::LiquidityPosition> {
         settlement::fees::get_position(&env, asset, provider)
+    }
+
+    /// Record flash loan fee revenue for an asset.
+    pub fn record_flash_fee(
+        env: Env,
+        asset: AssetId,
+        fee_amount: u64,
+    ) -> Result<u64, ContractError> {
+        fees::record_flash_fee(&env, asset, fee_amount)
+    }
+
+    /// Query the flash loan fee pool status for an asset.
+    pub fn get_flash_fee_pool(env: Env, asset: AssetId) -> fees::FlashLoanFeePool {
+        fees::get_flash_fee_pool(&env, asset)
+    }
+
+    /// Set the LP reward pool destination address for flash fee distributions.
+    pub fn set_lp_reward_pool(
+        env: Env,
+        admin: Address,
+        lp_reward_pool: Address,
+    ) -> Result<(), ContractError> {
+        fees::set_lp_reward_pool(&env, &admin, lp_reward_pool)
+    }
+
+    /// Distribute accumulated flash loan service fees (50% to LP reward pool and 50% to DAO treasury).
+    pub fn distribute_flash_fees(
+        env: Env,
+        caller: Address,
+        asset: AssetId,
+    ) -> Result<(u64, u64), ContractError> {
+        fees::distribute_flash_fees(&env, &caller, asset)
     }
 
     /// Get the current dynamic trading fee for an asset (in basis points)
