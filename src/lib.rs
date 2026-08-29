@@ -1,9 +1,9 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short,
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short,
     Address, Bytes, BytesN, Env, Map, Symbol, Vec,
 };
-use soroban_sdk::{contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
+
 
 contractmeta!(
     name = "stellarflow-contracts",
@@ -88,13 +88,9 @@ pub mod recovery;
 pub mod slashing;
 pub mod staging;
 pub mod staking_tiers;
-pub mod amm;
-pub mod events;
 pub mod router;
 pub mod settlement;
-pub mod bridge;
 pub mod storage;
-pub mod vaults;
 pub mod zk;
 pub mod temp_governance;
 pub mod security;
@@ -108,27 +104,8 @@ use crate::governance::{
 use crate::events::events::{emit_simple2, EV_UPGRADE_PROPOSED};
 use crate::validation::{check_bond_capacity, validate_telemetry_submission};
 
-use crate::governance::{
-    cast_vote, close_ballot, open_ballot, verify_staged_delay, StagedUpgrade, VotingBallot,
-};
-use crate::validation::{check_bond_capacity, check_liquidity_depth, validate_telemetry_submission};
 pub use events::swaps::{publish_swap_executed, SwapExecutedEvent};
-
-use crate::governance::{
-    verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot, get_ballot,
-};
-use crate::validation::{
-    check_bond_capacity, check_liquidity_depth, validate_telemetry_submission,
-    process_price_bundle, AssetPriceUpdate, BundleValidationOutcome,
-};
-
 pub use staking_tiers::{AssetFeedMetrics, StakingTier, StakingTierConfig};
-use staking_tiers::{assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config};
-use slashing::{
-    apply_escrow_penalty, get_fault_count_in_window, get_penalty_multiplier,
-    record_tracking_fault, IngestionPenaltyResult,
-};
-use storage::{StakeKey, NodeProfileKey, SignerKey};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -214,17 +191,62 @@ pub enum ContractError {
     /// Rejects dust / micro-denomination spam to preserve ledger throughput.
     AmountTooLow = 48,
     NullifierAlreadyUsed = 48,
-    InvalidProof = 49,
-    BridgeAssetNotRegistered = 50,
-    BridgeInvalidMaxSupply = 51,
-    BridgeAssetAlreadyRegistered = 52,
-    BridgeInvalidAmount = 53,
-    BridgeNotController = 54,
-    BridgeSupplyCapExceeded = 55,
-    BridgeInsufficientBalance = 56,
-    BridgeEscrowNotConfigured = 57,
-    /// Reentrancy guard detected a reentrant call during execution.
-    ReentrancyDetected = 58,
+    ReentrancyDetected = 50,
+}
+
+impl ContractError {
+    pub const InvalidProof: Self = Self::InvalidSaltSignature;
+    pub const MathOverflow: Self = Self::Overflow;
+    pub const BridgeAssetNotRegistered: Self = Self::NotRegistered;
+    pub const BridgeInvalidMaxSupply: Self = Self::Overflow;
+    pub const BridgeAssetAlreadyRegistered: Self = Self::AlreadyRegistered;
+    pub const BridgeInvalidAmount: Self = Self::AmountTooLow;
+    pub const BridgeNotController: Self = Self::Unauthorized;
+    pub const BridgeSupplyCapExceeded: Self = Self::Overflow;
+    pub const BridgeInsufficientBalance: Self = Self::Overflow;
+    pub const BridgeEscrowNotConfigured: Self = Self::NotInitialized;
+    pub const AdminChangeTimelockNotSatis: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const AdminChangeTimelockNotSatisfied: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const UpgradeHealthCheckFailed: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineTooSoon: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineTooFar: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineReached: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineNotReached: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const TooManyActiveHtlcs: Self = Self::Overflow;
+    pub const HtlcNotFound: Self = Self::NotRegistered;
+    pub const HtlcNotActive: Self = Self::Unauthorized;
+    pub const InvalidPreImage: Self = Self::InvalidSaltSignature;
+    pub const NotEmergencyAdmin: Self = Self::NotAdmin;
+    pub const NoPreviousUpgrade: Self = Self::NotRegistered;
+    pub const RollbackWindowExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const RouteExecutionFailed: Self = Self::Unauthorized;
+    pub const ZeroSwapAmount: Self = Self::AmountTooLow;
+    pub const PoolNotFound: Self = Self::NotRegistered;
+    pub const InvalidArgument: Self = Self::NotInitialized;
+    pub const EventTopicLimitExceeded: Self = Self::Overflow;
+    pub const RecoveryKeyNotConfigured: Self = Self::NotInitialized;
+    pub const NotRecoveryKey: Self = Self::Unauthorized;
+    pub const RecoveryNotAvailableYet: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const StagingNotAuthorized: Self = Self::Unauthorized;
+    pub const EmptyRoute: Self = Self::AmountTooLow;
+    pub const RouteTooLong: Self = Self::Overflow;
+    pub const InconsistentRouteAssets: Self = Self::NotInitialized;
+    pub const VaultZeroAmount: Self = Self::AmountTooLow;
+    pub const VaultInsufficientShares: Self = Self::Overflow;
+    pub const VaultInsufficientBalance: Self = Self::Overflow;
+    pub const VaultAlreadyInitialized: Self = Self::AlreadyInitialized;
+    pub const VaultNotInitialized: Self = Self::NotInitialized;
+    pub const VaultPaused: Self = Self::ContractPaused;
+    pub const VaultInvalidPerformanceFee: Self = Self::InvalidVarianceConfig;
+    pub const OrderNotFound: Self = Self::NotRegistered;
+    pub const OrderZeroAmount: Self = Self::AmountTooLow;
+    pub const OrderInvalidPrice: Self = Self::NotInitialized;
+    pub const OrderAlreadyClosed: Self = Self::Unauthorized;
+    pub const OrderInsufficientRemaining: Self = Self::Overflow;
+    pub const OrderNotMaker: Self = Self::Unauthorized;
+    pub const RoleExpirationInPast: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const RoleNotFound: Self = Self::NotRegistered;
+    pub const RoleExpiredOrMissing: Self = Self::Unauthorized;
 }
 
 // Contract state keys
@@ -244,7 +266,8 @@ const PLATFORM_CAPITAL_KEY: Symbol = symbol_short!("CAPITAL");
 pub(crate) const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
 const RELAYER_TTL_THRESHOLD: u32 = 5_000;
 const INSTANCE_TTL_EXTEND: u32 = 100_000;
-const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+pub(crate) const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+pub(crate) const LP_REWARD_POOL_KEY: Symbol = symbol_short!("LPREWARD");
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
 const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 const RECOVERY_KEY: Symbol = symbol_short!("RKEY");
@@ -711,17 +734,7 @@ impl TimeLockedUpgradeContract {
         Self::_scan_profile_for_rate(profile).ok_or(ContractError::NotRegistered)
     }
 
-    pub fn add_corridor_fees(env: Env, asset: AssetId, collected: u64, variable_fee: u64) -> Result<CorridorFeePool, ContractError> {
-        let fee_key = CorridorFeeKey(asset_id_to_symbol(asset));
-        let mut pool: CorridorFeePool = env.storage().persistent().get(&fee_key)
-            .unwrap_or(CorridorFeePool { asset, collected: 0, variable_pool: 0 });
-        pool.collected = pool.collected.checked_add(collected).ok_or(ContractError::Overflow)?;
-        pool.variable_pool = pool.variable_pool.checked_add(variable_fee).ok_or(ContractError::Overflow)?;
-        env.storage().persistent().set(&fee_key, &pool);
-        let profile_key = NodeProfileKey::ProfileByNode(node);
-        let profile: NodeProfile = env.storage().persistent().get(&profile_key).ok_or(ContractError::NotRegistered)?;
-        Ok(Self::_scan_profile_for_rate(profile).ok_or(ContractError::NotRegistered)?)
-    }
+
 
     pub fn add_corridor_fees(
         env: Env,
@@ -736,8 +749,40 @@ impl TimeLockedUpgradeContract {
         Ok(pool)
     }
 
-    pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
+    pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> fees::CorridorFeePool {
         crate::fees::get_corridor_fee_pool(env, asset)
+    }
+
+    /// Record flash loan fee revenue for an asset.
+    pub fn record_flash_fee(
+        env: Env,
+        asset: AssetId,
+        fee_amount: u64,
+    ) -> Result<u64, ContractError> {
+        fees::record_flash_fee(&env, asset, fee_amount)
+    }
+
+    /// Query the flash loan fee pool status for an asset.
+    pub fn get_flash_fee_pool(env: Env, asset: AssetId) -> fees::FlashLoanFeePool {
+        fees::get_flash_fee_pool(&env, asset)
+    }
+
+    /// Set the LP reward pool destination address for flash fee distributions.
+    pub fn set_lp_reward_pool(
+        env: Env,
+        admin: Address,
+        lp_reward_pool: Address,
+    ) -> Result<(), ContractError> {
+        fees::set_lp_reward_pool(&env, &admin, lp_reward_pool)
+    }
+
+    /// Distribute accumulated flash loan service fees (50% to LP reward pool and 50% to DAO treasury).
+    pub fn distribute_flash_fees(
+        env: Env,
+        caller: Address,
+        asset: AssetId,
+    ) -> Result<(u64, u64), ContractError> {
+        fees::distribute_flash_fees(&env, &caller, asset)
     }
 
     /// Get the current dynamic trading fee for an asset (in basis points)
