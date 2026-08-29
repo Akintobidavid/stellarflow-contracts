@@ -240,11 +240,7 @@ pub fn add_corridor_fees(
     admin.require_auth();
     // Reject dust deposits that fall below the minimum transfer threshold.
     crate::validation::dust::check_min_transfer(collected)?;
-    let data: crate::ContractData = env
-        .storage()
-        .instance()
-        .get(&crate::DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
+    let data = TimeLockedUpgradeContract::load_data(&env)?;
     if data.admin != admin {
         return Err(ContractError::NotAdmin);
     }
@@ -379,6 +375,10 @@ pub fn set_dynamic_fee_config(
     period_seconds: u64,
 ) -> Result<(), ContractError> {
     caller.require_auth();
+    let data = TimeLockedUpgradeContract::load_data(env)?;
+    if data.admin != *caller {
+        return Err(ContractError::NotAdmin);
+    }
     
     // Validate bounds
     if min_fee_bps < 5 || max_fee_bps > 30 || min_fee_bps >= max_fee_bps {
@@ -418,11 +418,7 @@ pub fn set_corridor_weight(
     dynamic_weight: u64,
 ) -> Result<CorridorWeightProfile, ContractError> {
     admin.require_auth();
-    let data: crate::ContractData = env
-        .storage()
-        .instance()
-        .get(&crate::DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
+    let data = TimeLockedUpgradeContract::load_data(&env)?;
     if data.admin != admin {
         return Err(ContractError::NotAdmin);
     }

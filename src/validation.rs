@@ -50,8 +50,6 @@ pub const MIN_RESERVE_BALANCE: i128 = 1_000_000_000_000;
 /// This is set to 10,000 XLM equivalent (10_000 * 10^7 stroops).
 pub const MIN_TRADING_VOLUME: i128 = 100_000_000_000;
 
-
-
 /// Return the current locked stake for `node`, or 0 if unregistered.
 pub fn get_locked_stake(env: &Env, node: &Address) -> u64 {
     let stakes: Map<Address, u64> = env
@@ -72,8 +70,6 @@ pub fn check_bond_capacity(env: &Env, node: &Address, _pool: &Symbol) -> Result<
     }
     Ok(())
 }
-
-
 
 /// Validate that an incoming telemetry payload's ledger timestamp is not
 /// too far behind the current ledger block time.

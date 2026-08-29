@@ -11,7 +11,7 @@
 //! ever *pulled* from the caller's own token balance via `transfer`; a
 //! keeper can only ever add value to the vault, never fabricate or drain it.
 
-use soroban_sdk::{contracttype, token, Address, Env};
+use soroban_sdk::{contracttype, token, Address, Env, IntoVal};
 
 use crate::ContractError;
 
@@ -50,6 +50,48 @@ pub struct HarvestResult {
     pub performance_fee: i128,
     pub compounded: i128,
     pub total_assets: i128,
+}
+
+/// Lend vault assets to `borrower` for the duration of one transaction.
+/// The borrower must implement `on_flash_loan(asset, amount, fee)` and return
+/// at least the principal plus the protocol fee before the callback returns.
+pub fn flash_loan(env: &Env, borrower: Address, amount: i128) -> Result<i128, ContractError> {
+    if amount <= 0 {
+        return Err(ContractError::VaultZeroAmount);
+    }
+    let config = load_config(env)?;
+    let token_client = token::Client::new(env, &config.asset);
+    let initial_balance = token_client.balance(&env.current_contract_address());
+    let fee = amount
+        .checked_mul(i128::from(config.fee_bps))
+        .ok_or(ContractError::MathOverflow)?
+        .checked_div(BPS_DENOMINATOR)
+        .ok_or(ContractError::DivisionByZero)?;
+    let required_balance = initial_balance
+        .checked_add(fee)
+        .ok_or(ContractError::MathOverflow)?;
+
+    token_client.transfer(&env.current_contract_address(), &borrower, &amount);
+    env.invoke_contract::<()>(
+        &borrower,
+        &soroban_sdk::symbol_short!("on_flash_loan"),
+        soroban_sdk::vec![
+            env,
+            config.asset.into_val(env),
+            amount.into_val(env),
+            fee.into_val(env),
+        ],
+    );
+
+    let final_balance = token_client.balance(&env.current_contract_address());
+    assert!(
+        final_balance >= required_balance,
+        "Flash loan repayment incomplete: final={}, required={}",
+        final_balance,
+        required_balance
+    );
+
+    Ok(fee)
 }
 
 fn load_config(env: &Env) -> Result<VaultConfig, ContractError> {
