@@ -15,6 +15,7 @@ members = [
     "contracts/price-oracle",
     "contracts/reward-splitter",
     "contracts/gas-tank",
+    "contracts/relayer-allowance",
     "contracts/stop-loss-trigger",
     "tests/benchmarks",
     "tests/fuzz",
